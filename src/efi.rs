@@ -87,9 +87,12 @@ pub(crate) fn is_efi_booted() -> Result<bool> {
         .map_err(Into::into)
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub(crate) struct Efi {
     mountpoint: RefCell<Option<PathBuf>>,
+    /// Whether the above mountpoint was already mounted or not
+    /// Won't unmount if it was already mounted
+    was_mounted: RefCell<bool>,
 }
 
 impl Efi {
@@ -116,6 +119,7 @@ impl Efi {
                     continue;
                 }
                 util::ensure_writable_mount(&path)?;
+                *self.was_mounted.borrow_mut() = true;
                 found_mount = Some(path);
                 break;
             }
@@ -148,6 +152,7 @@ impl Efi {
                 if is_mount_point(&mnt)? {
                     log::debug!("ESP already mounted at {mnt:?}, reusing");
                     mountpoint = Some(mnt);
+                    *self.was_mounted.borrow_mut() = true;
                     break;
                 }
             }
@@ -180,6 +185,7 @@ impl Efi {
     }
 
     pub(crate) fn unmount(&self) -> Result<()> {
+        *self.was_mounted.borrow_mut() = false;
         if let Some(mount) = self.mountpoint.borrow_mut().take() {
             Command::new("umount")
                 .arg(&mount)
@@ -704,7 +710,12 @@ impl Component for Efi {
 
 impl Drop for Efi {
     fn drop(&mut self) {
-        log::debug!("Unmounting");
+        if *self.was_mounted.borrow() {
+            log::debug!("mountpoint was already mounted. Won't unmount",);
+            return;
+        }
+
+        log::debug!("Unmounting {:?}", self.mountpoint);
         let _ = self.unmount();
     }
 }
