@@ -856,6 +856,7 @@ fn generate_meta_from_usr_efi(sysroot_path: &Utf8Path) -> Result<ContentMetadata
         timestamp: get_metadata_timestamp()?,
         version: packages.join(","),
         versions: Some(modules_vec),
+        default_bootloader: None,
     };
 
     Ok(meta)

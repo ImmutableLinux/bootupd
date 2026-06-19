@@ -50,6 +50,7 @@ impl ContentMetadata01 {
             timestamp,
             version: self.version,
             versions: None,
+            default_bootloader: None,
         }
     }
 }

@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 
 use bootc_internal_blockdev::Device;
 
+use crate::cli::bootupd::DefaultBootloaderOpts;
 use crate::{bootloader::Bootloader, bootupd::RootContext, model::*};
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -139,6 +140,32 @@ pub(crate) trait Component {
     fn component_update_data_name(&self) -> PathBuf {
         Path::new(&format!("{}.json", self.name())).into()
     }
+
+    fn set_default_bootloader(&self, opts: &DefaultBootloaderOpts) -> Result<()> {
+        if !self.is_bootloader_supported(opts.bootloader) {
+            anyhow::bail!("{} not supported for {}", opts.bootloader, self.name());
+        }
+
+        let root_path = opts.sysroot.as_deref().unwrap_or("/");
+
+        let root = Dir::open_ambient_dir(root_path, ambient_authority())
+            .with_context(|| format!("Opening {root_path}"))?;
+
+        // This command expects bootupd.json to be present
+        let mut update_meta = self
+            .get_component_update(&root, None)?
+            .ok_or_else(|| anyhow::anyhow!("Expected to get update metadata"))?;
+
+        if !update_meta.bootloader_available(opts.bootloader) {
+            anyhow::bail!("{} is not present in metadata", opts.bootloader);
+        }
+
+        update_meta.default_bootloader = Some(opts.bootloader);
+
+        write_update_metadata(root_path, self.component_update_data_name(), &update_meta)?;
+
+        Ok(())
+    }
 }
 
 /// Given a component name, create an implementation.
@@ -207,6 +234,7 @@ pub(crate) fn query_adopt_state() -> Result<Option<Adoptable>> {
             timestamp: coreos_aleph.ts,
             version: coreos_aleph.aleph.version,
             versions: None,
+            default_bootloader: None,
         };
         log::trace!("Adoptable: {:?}", &meta);
         return Ok(Some(Adoptable {
@@ -224,6 +252,7 @@ pub(crate) fn query_adopt_state() -> Result<Option<Adoptable>> {
             timestamp,
             version: "unknown".to_string(),
             versions: None,
+            default_bootloader: None,
         };
         return Ok(Some(Adoptable {
             version: meta,
@@ -236,6 +265,7 @@ pub(crate) fn query_adopt_state() -> Result<Option<Adoptable>> {
 #[cfg(test)]
 mod tests {
     use cap_std::fs::{DirBuilder, DirBuilderExt, Permissions, PermissionsExt};
+    use chrono::Utc;
 
     use super::*;
 
@@ -311,6 +341,79 @@ mod tests {
                 }
             }
         }
+        Ok(())
+    }
+
+    #[test]
+    fn test_set_default_bootloader() -> Result<()> {
+        let td = tempfile::tempdir()?;
+        let sysroot = td.path().to_str().unwrap().to_string();
+        let tdir = Dir::open_ambient_dir(&sysroot, ambient_authority())?;
+
+        // Create the updates directory
+        let mut dir_builder = DirBuilder::new();
+        dir_builder.mode(0o755);
+        dir_builder.recursive(true);
+        tdir.create_dir_with(BOOTUPD_UPDATES_DIR, &dir_builder)?;
+
+        // Create test metadata without the target bootloader
+        let meta = ContentMetadata {
+            timestamp: Utc::now(),
+            version: "grub2-efi-x64-1:2.12-21.fc41.x86_64".into(), // Only has grub2-efi, not grub-cc
+            versions: None,
+            default_bootloader: None,
+        };
+
+        let all_components = crate::bootupd::get_components();
+        let efi_component = all_components.get("EFI").unwrap();
+
+        // Write metadata file
+        write_update_metadata(&sysroot, efi_component.component_update_data_name(), &meta)?;
+
+        let opts = DefaultBootloaderOpts {
+            sysroot: Some(sysroot.clone()),
+            bootloader: Bootloader::GrubCC, // This bootloader is not in the metadata version string
+        };
+
+        if efi_component.is_bootloader_supported(opts.bootloader) {
+            let result = efi_component.set_default_bootloader(&opts);
+            assert!(result.is_err());
+            assert!(result
+                .unwrap_err()
+                .to_string()
+                .contains("is not present in metadata"));
+        }
+
+        // Now create test metadata with both bootloaders available
+        let meta = ContentMetadata {
+            timestamp: Utc::now(),
+            version: "grub2-efi-x64-1:2.12-21.fc41.x86_64,grub-cc-efi-x64-1:2.12-21.fc41.x86_64"
+                .into(),
+            versions: None,
+            default_bootloader: None,
+        };
+
+        // Write initial metadata file
+        write_update_metadata(&sysroot, efi_component.component_update_data_name(), &meta)?;
+
+        let opts = DefaultBootloaderOpts {
+            sysroot: Some(sysroot.clone()),
+            bootloader: Bootloader::GrubCC,
+        };
+
+        if efi_component.is_bootloader_supported(opts.bootloader) {
+            // Should succeed
+            let result = efi_component.set_default_bootloader(&opts);
+            assert!(result.is_ok());
+
+            // Verify the metadata was updated
+            let root = Dir::open_ambient_dir(&sysroot, ambient_authority())?;
+            let updated_meta = efi_component.get_component_update(&root, None)?;
+            assert!(updated_meta.is_some());
+            let updated_meta = updated_meta.unwrap();
+            assert_eq!(updated_meta.default_bootloader, Some(Bootloader::GrubCC));
+        }
+
         Ok(())
     }
 }

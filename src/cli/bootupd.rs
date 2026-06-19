@@ -40,6 +40,7 @@ pub enum DVerb {
     GenerateUpdateMetadata(GenerateOpts),
     #[clap(name = "install", about = "Install components")]
     Install(InstallOpts),
+    SetDefaultBootloader(DefaultBootloaderOpts),
 }
 
 #[derive(Debug, Parser)]
@@ -98,12 +99,22 @@ pub struct GenerateOpts {
     sysroot: Option<String>,
 }
 
+#[derive(Debug, Parser)]
+pub struct DefaultBootloaderOpts {
+    /// Physical root mountpoint
+    #[clap(long)]
+    pub(crate) sysroot: Option<String>,
+    /// The bootloader to be set as the default
+    pub(crate) bootloader: Bootloader,
+}
+
 impl DCommand {
     /// Run CLI application.
     pub fn run(self) -> Result<()> {
         match self.cmd {
             DVerb::Install(opts) => Self::run_install(opts),
             DVerb::GenerateUpdateMetadata(opts) => Self::run_generate_meta(opts),
+            DVerb::SetDefaultBootloader(opts) => Self::set_default_bootloader(opts),
         }
     }
 
@@ -158,6 +169,27 @@ impl DCommand {
             opts.bootloader,
         )
         .context("boot data installation failed")?;
+        Ok(())
+    }
+
+    pub(crate) fn set_default_bootloader(opts: DefaultBootloaderOpts) -> Result<()> {
+        let all_components = crate::bootupd::get_components();
+        let target_components: Vec<_> = all_components.values().collect();
+
+        for &component in target_components.iter() {
+            if !component.is_bootloader_supported(opts.bootloader) {
+                log::info!(
+                    "{} is not supported for {}. Skipping...",
+                    opts.bootloader,
+                    component.name()
+                );
+
+                continue;
+            }
+
+            component.set_default_bootloader(&opts)?;
+        }
+
         Ok(())
     }
 }
