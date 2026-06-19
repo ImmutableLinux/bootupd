@@ -450,7 +450,7 @@ impl Component for Efi {
     ) -> Result<InstalledContent> {
         let src_dir = Dir::open_ambient_dir(src_root, ambient_authority())
             .with_context(|| format!("opening source directory {src_root}"))?;
-        let Some(meta) = get_component_update(&src_dir, self, Some(bootloader))? else {
+        let Some(meta) = self.get_component_update(&src_dir, Some(bootloader))? else {
             anyhow::bail!("No update metadata for component {} found", self.name());
         };
         log::debug!("Found metadata {}", meta.version);
@@ -624,7 +624,11 @@ impl Component for Efi {
             ostreeboot.remove_all_optional("efi/EFI")?;
         };
 
-        write_update_metadata(sysroot_path.as_str(), self, &metadata)?;
+        write_update_metadata(
+            sysroot_path.as_str(),
+            self.component_update_data_name(),
+            &metadata,
+        )?;
 
         Ok(Some(metadata))
     }
@@ -634,7 +638,7 @@ impl Component for Efi {
         sysroot: &Dir,
         bootloader: Bootloader,
     ) -> Result<Option<ContentMetadata>> {
-        get_component_update(sysroot, self, Some(bootloader))
+        self.get_component_update(sysroot, Some(bootloader))
     }
 
     fn query_requires_update(&self, _sysroot: &Dir) -> Result<()> {

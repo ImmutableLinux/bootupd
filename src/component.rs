@@ -99,6 +99,46 @@ pub(crate) trait Component {
     fn get_efi_vendor(&self, sysroot: &Path) -> Result<Option<String>>;
 
     fn is_bootloader_supported(&self, bootloader: Bootloader) -> bool;
+
+    /// Given a component, return metadata on the available update (if any)
+    //
+    /// If bootloader is Some, all metadata not pertaining to the specified bootloader
+    /// is filtered
+    ///
+    /// If bootloader is None, no filtering is performed
+    #[context("Loading update for component {}", self.name())]
+    fn get_component_update(
+        &self,
+        sysroot: &Dir,
+        bootloader: Option<Bootloader>,
+    ) -> Result<Option<ContentMetadata>> {
+        let name = self.component_update_data_name();
+        let path = Path::new(BOOTUPD_UPDATES_DIR).join(&name);
+
+        let Some(f) = sysroot.open_optional(&path)? else {
+            return Ok(None);
+        };
+
+        let mut f = std::io::BufReader::new(f);
+        let mut u = serde_json::from_reader(&mut f)
+            .with_context(|| format!("failed to parse {:?}", &path))?;
+
+        let Some(bootloader) = bootloader else {
+            return Ok(Some(u));
+        };
+
+        // We store metadata of all bootloaders present in the image
+        // So here, we will now filter out the bootloaders
+        u.filter_bootloader(bootloader);
+
+        Ok(Some(u))
+    }
+
+    /// Returns the name of the JSON file containing a component's available update metadata installed
+    /// into the booted operating system root.
+    fn component_update_data_name(&self) -> PathBuf {
+        Path::new(&format!("{}.json", self.name())).into()
+    }
 }
 
 /// Given a component name, create an implementation.
@@ -141,63 +181,22 @@ pub(crate) fn component_updatedir(sysroot: &str, component: &dyn Component) -> P
     Path::new(sysroot).join(component_updatedirname(component))
 }
 
-/// Returns the name of the JSON file containing a component's available update metadata installed
-/// into the booted operating system root.
-fn component_update_data_name(component: &dyn Component) -> PathBuf {
-    Path::new(&format!("{}.json", component.name())).into()
-}
-
 /// Helper method for writing an update file
 pub(crate) fn write_update_metadata(
     sysroot: &str,
-    component: &dyn Component,
+    file_path: PathBuf,
     meta: &ContentMetadata,
 ) -> Result<()> {
     let sysroot = Dir::open_ambient_dir(sysroot, ambient_authority())?;
     let dir = sysroot.open_dir(BOOTUPD_UPDATES_DIR)?;
-    let name = component_update_data_name(component);
 
     dir.atomic_write_with_perms(
-        name,
+        file_path,
         serde_json::to_vec(&meta).context("Serializing metadata")?,
         Permissions::from_mode(0o644),
     )?;
 
     Ok(())
-}
-
-/// Given a component, return metadata on the available update (if any)
-//
-/// If bootloader is Some, all metadata not pertaining to the specified bootloader
-/// is filtered
-///
-/// If bootloader is None, no filtering is performed
-#[context("Loading update for component {}", component.name())]
-pub(crate) fn get_component_update(
-    sysroot: &Dir,
-    component: &dyn Component,
-    bootloader: Option<Bootloader>,
-) -> Result<Option<ContentMetadata>> {
-    let name = component_update_data_name(component);
-    let path = Path::new(BOOTUPD_UPDATES_DIR).join(&name);
-
-    let Some(f) = sysroot.open_optional(&path)? else {
-        return Ok(None);
-    };
-
-    let mut f = std::io::BufReader::new(f);
-    let mut u =
-        serde_json::from_reader(&mut f).with_context(|| format!("failed to parse {:?}", &path))?;
-
-    let Some(bootloader) = bootloader else {
-        return Ok(Some(u));
-    };
-
-    // We store metadata of all bootloaders present in the image
-    // So here, we will now filter out the bootloaders
-    u.filter_bootloader(bootloader);
-
-    Ok(Some(u))
 }
 
 #[context("Querying adoptable state")]

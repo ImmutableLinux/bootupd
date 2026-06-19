@@ -123,7 +123,7 @@ impl Component for Bios {
             device.ok_or_else(|| anyhow::anyhow!("BIOS component requires a target device"))?;
         let src_dir = Dir::open_ambient_dir(src_root, ambient_authority())
             .with_context(|| format!("opening source directory {src_root}"))?;
-        let Some(meta) = get_component_update(&src_dir, self, Some(bootloader))? else {
+        let Some(meta) = self.get_component_update(&src_dir, Some(bootloader))? else {
             anyhow::bail!("No update metadata for component {} found", self.name());
         };
 
@@ -146,7 +146,7 @@ impl Component for Bios {
 
         // Query the rpm database and list the package and build times for /usr/sbin/grub2-install
         let meta = packagesystem::query_files(sysroot_path, [&grub_install])?;
-        write_update_metadata(sysroot_path, self, &meta)?;
+        write_update_metadata(sysroot_path, self.component_update_data_name(), &meta)?;
         Ok(Some(meta))
     }
 
@@ -264,7 +264,7 @@ impl Component for Bios {
             return Ok(None);
         }
 
-        get_component_update(sysroot, self, Some(bootloader))
+        self.get_component_update(sysroot, Some(bootloader))
     }
 
     fn query_requires_update(&self, sysroot: &Dir) -> Result<()> {
