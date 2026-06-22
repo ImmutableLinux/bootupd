@@ -166,6 +166,14 @@ pub(crate) trait Component {
 
         Ok(())
     }
+
+    fn get_default_bootloader(&self, root: &Dir) -> Result<Option<Bootloader>> {
+        let update_meta = self
+            .get_component_update(&root, None)?
+            .ok_or_else(|| anyhow::anyhow!("Expected to get update metadata"))?;
+
+        Ok(update_meta.default_bootloader)
+    }
 }
 
 /// Given a component name, create an implementation.

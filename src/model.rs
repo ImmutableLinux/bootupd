@@ -38,6 +38,21 @@ impl ContentMetadata {
         }
     }
 
+    /// Returns bootloaders are available for install
+    pub(crate) fn num_bootloader_available(&self) -> Vec<Bootloader> {
+        let mut available = vec![];
+
+        if let Some(versions) = &self.versions {
+            for version in versions {
+                if let Ok(b) = Bootloader::try_from_efi_component_name(&version.name) {
+                    available.push(b);
+                }
+            }
+        }
+
+        return available;
+    }
+
     pub(crate) fn bootloader_available(&mut self, bootloader: Bootloader) -> bool {
         self.version
             .split(",")

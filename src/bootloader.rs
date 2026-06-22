@@ -47,6 +47,14 @@ impl Bootloader {
             Bootloader::GrubCC => "grub-cc",
         }
     }
+
+    pub(crate) fn try_from_efi_component_name(component_name: &str) -> Result<Self> {
+        match component_name {
+            "grub2" => Ok(Self::Grub),
+            "grub-cc" => Ok(Self::GrubCC),
+            _ => anyhow::bail!("Not a valid bootloader: {component_name}"),
+        }
+    }
 }
 
 #[cfg(any(target_arch = "powerpc64", target_arch = "s390x"))]

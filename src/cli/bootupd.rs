@@ -44,52 +44,52 @@ pub enum DVerb {
 }
 
 #[derive(Debug, Parser)]
-pub struct InstallOpts {
+pub(crate) struct InstallOpts {
     /// Source root
     #[clap(long, value_parser, default_value_t = String::from("/"))]
-    src_root: String,
+    pub(crate) src_root: String,
     /// Target root
     #[clap(value_parser)]
-    dest_root: String,
+    pub(crate) dest_root: String,
 
     /// Target device(s) for bootloader installation. Can be specified multiple
     /// times to install to multiple devices (e.g., for multi-disk RAID/LVM setups).
     #[clap(long, action = clap::ArgAction::Append, conflicts_with = "filesystem")]
-    device: Vec<String>,
+    pub(crate) device: Vec<String>,
 
     /// Filesystem path to inspect for backing devices. Bootupd will walk up the
     /// device hierarchy to find physical disks and install to all ESPs found.
     #[clap(long)]
-    filesystem: Option<String>,
+    pub(crate) filesystem: Option<String>,
 
     /// Enable installation of the built-in static config files
     #[clap(long)]
-    with_static_configs: bool,
+    pub(crate) with_static_configs: bool,
 
     /// Implies `--with-static-configs`.  When present, this also writes a
     /// file with the UUID of the target filesystems.
     #[clap(long)]
-    write_uuid: bool,
+    pub(crate) write_uuid: bool,
 
     /// On EFI systems, invoke `efibootmgr` to update the firmware.
     #[clap(long)]
-    update_firmware: bool,
+    pub(crate) update_firmware: bool,
 
     #[clap(long = "component", conflicts_with = "auto")]
     /// Only install these components
-    components: Option<Vec<String>>,
+    pub(crate) components: Option<Vec<String>>,
 
     /// Automatically choose components based on booted host state.
     ///
     /// For example on x86_64, if the host system is booted via EFI,
     /// then only enable installation to the ESP.
     #[clap(long)]
-    auto: bool,
+    pub(crate) auto: bool,
 
     /// The bootloader to use
     /// Defaults to Grub
-    #[clap(long, default_value_t = Bootloader::Grub)]
-    bootloader: Bootloader,
+    #[clap(long)]
+    pub(crate) bootloader: Option<Bootloader>,
 }
 
 #[derive(Debug, Parser)]
@@ -130,7 +130,7 @@ impl DCommand {
 
     /// Runner for `install` verb.
     pub(crate) fn run_install(opts: InstallOpts) -> Result<()> {
-        if opts.bootloader != Bootloader::Grub
+        if !matches!(opts.bootloader, Some(Bootloader::Grub) | None)
             && cfg!(any(target_arch = "powerpc64", target_arch = "s390x"))
         {
             anyhow::bail!("Only Grub is supported for powerpc64 and s390x");
@@ -158,17 +158,7 @@ impl DCommand {
                 .collect::<Result<Vec<_>>>()?
         };
 
-        bootupd::install(
-            &opts.src_root,
-            &opts.dest_root,
-            &devices,
-            configmode,
-            opts.update_firmware,
-            opts.components.as_deref(),
-            opts.auto,
-            opts.bootloader,
-        )
-        .context("boot data installation failed")?;
+        bootupd::install(&opts, &devices, configmode).context("boot data installation failed")?;
         Ok(())
     }
 

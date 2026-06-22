@@ -1,6 +1,7 @@
 #[cfg(any(target_arch = "x86_64", target_arch = "powerpc64"))]
 use crate::bios;
 use crate::bootloader::{get_bootloader, Bootloader};
+use crate::cli::bootupd::InstallOpts;
 use crate::component;
 use crate::component::{Component, ValidationResult};
 use crate::coreos;
@@ -53,30 +54,30 @@ impl ConfigMode {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn install(
-    source_root: &str,
-    dest_root: &str,
-    devices: &[Device],
-    configs: ConfigMode,
-    update_firmware: bool,
-    target_components: Option<&[String]>,
-    auto_components: bool,
-    bootloader: Bootloader,
-) -> Result<()> {
-    let source_root_dir =
-        Dir::open_ambient_dir(source_root, ambient_authority()).context("Opening source root")?;
-    SavedState::ensure_not_present(dest_root, bootloader)
-        .context("failed to install, invalid re-install attempted")?;
+pub(crate) fn install(opts: &InstallOpts, devices: &[Device], configs: ConfigMode) -> Result<()> {
+    // SavedState needs to be per component
+    // Consider this scenario:
+    // - Grub installed (statefile in /sysroot/boot)
+    // - Re-install attempted with GrubCC
+    //
+    // So we can't just check statefile based on the determined bootloader
+    // We need to check all cases
+    for b in Bootloader::iter() {
+        SavedState::ensure_not_present(&opts.dest_root, b)
+            .context("failed to install, invalid re-install attempted")?;
+    }
 
-    let all_components = get_components_impl(auto_components);
+    let source_root_dir = Dir::open_ambient_dir(&opts.src_root, ambient_authority())
+        .context("Opening source root")?;
+
+    let all_components = get_components_impl(opts.auto);
     if all_components.is_empty() {
         println!("No components available for this platform.");
         return Ok(());
     }
-    let target_components = if let Some(target_components) = target_components {
+    let target_components = if let Some(target_components) = &opts.components {
         // Checked by CLI parser
-        assert!(!auto_components);
+        assert!(!opts.auto);
         target_components
             .iter()
             .map(|name| {
@@ -89,12 +90,70 @@ pub(crate) fn install(
         all_components.values().collect()
     };
 
-    if target_components.is_empty() && !auto_components {
+    if target_components.is_empty() && !opts.auto {
         anyhow::bail!("No components specified");
     }
 
+    let bootloader = match opts.bootloader {
+        // CLI overrides anything else
+        Some(b) => b,
+        None => {
+            let mut efi_default = None;
+            let mut efi_component_update = None;
+            let mut bios_default = None;
+
+            for c in &target_components {
+                if c.name() == "EFI" {
+                    efi_default = c.get_default_bootloader(&source_root_dir)?;
+
+                    if efi_default.is_none() {
+                        // We don't want to filter any bootloader
+                        efi_component_update = c.get_component_update(&source_root_dir, None)?;
+                    }
+                }
+
+                if c.name() == "BIOS" {
+                    bios_default = c.get_default_bootloader(&source_root_dir)?;
+                }
+            }
+
+            match (bios_default, efi_default) {
+                // EFI bootloader takes precedence
+                // Take the following example
+                //  - BIOS default = Grub (always)
+                //  - EFI default = GrubCC
+                //
+                //  We can't install GrubCC for BIOS as it's not supported
+                //  So we just default to installing GrubCC
+                (Some(_), Some(eb)) => eb,
+                (None, Some(eb)) => eb,
+                (Some(bb), None) => bb,
+
+                // We still can get the bootloader by reading in the EFI component update
+                // If there's only ONE bootloader in the metadata, then that's the one to
+                // be installed
+                (None, None) => {
+                    let Some(efi_component_update) = efi_component_update else {
+                        anyhow::bail!("Could not determine bootloader. Default bootloader not set")
+                    };
+
+                    let available_bootloaders = efi_component_update.num_bootloader_available();
+
+                    if available_bootloaders.len() != 1 {
+                        anyhow::bail!(
+                            "Could not determine bootloader. Default bootloader not set. Multiple bootloaders found as install candidates"
+                        )
+                    }
+
+                    available_bootloaders[0]
+                }
+            }
+        }
+    };
+
     let mut state = SavedState::default();
     let mut installed_efi_vendor = None;
+
     for &component in target_components.iter() {
         // skip for BIOS if no devices specified
         if component.name() == "BIOS" && devices.is_empty() {
@@ -162,7 +221,13 @@ pub(crate) fn install(
         for device in &devices_to_install {
             let device_desc = device.map_or("(auto)".to_string(), |d| d.path());
             let meta = component
-                .install(source_root, dest_root, *device, update_firmware, bootloader)
+                .install(
+                    &opts.src_root,
+                    &opts.dest_root,
+                    *device,
+                    opts.update_firmware,
+                    bootloader,
+                )
                 .with_context(|| {
                     format!(
                         "installing component {} to device {}",
@@ -185,13 +250,13 @@ pub(crate) fn install(
             }
             // Yes this is a hack...the Component thing just turns out to be too generic.
             if installed_efi_vendor.is_none() {
-                if let Some(vendor) = component.get_efi_vendor(Path::new(source_root))? {
+                if let Some(vendor) = component.get_efi_vendor(Path::new(&opts.src_root))? {
                     installed_efi_vendor = Some(vendor);
                 }
             }
         }
     }
-    let sysroot = &Dir::open_ambient_dir(dest_root, ambient_authority())?;
+    let sysroot = &Dir::open_ambient_dir(&opts.dest_root, ambient_authority())?;
 
     #[cfg(any(
         target_arch = "x86_64",
@@ -219,7 +284,7 @@ pub(crate) fn install(
     // Unmount the ESP, etc.
     drop(target_components);
 
-    let mut state_guard = SavedState::unlocked(dest_root.into(), sysroot.try_clone()?)
+    let mut state_guard = SavedState::unlocked(opts.dest_root.clone().into(), sysroot.try_clone()?)
         .context("failed to acquire write lock")?;
     state_guard
         .update_state(&state, bootloader)
