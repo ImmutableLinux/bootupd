@@ -51,14 +51,16 @@ fn parse_statefile(statusf: cap_std::fs::File) -> Result<Option<SavedState>> {
 /// device from checking mount point from /boot or /sysroot
 #[context("Getting parent device")]
 fn get_parent_device(root: &Dir) -> Result<Device> {
-    match bootc_internal_blockdev::list_dev_by_dir(root) {
-        Ok(d) => Ok(d),
-        Err(e) => {
-            // Not really an error just yet
-            log::debug!("{e:?}");
-            list_dev_current_root()
-        }
+    let root_fs = bootc_internal_mount::inspect_filesystem_of_dir(root)
+        .context("Inspecting root filesystem")?;
+
+    if root_fs.fstype == "overlay" && root_fs.source.contains("composefs") {
+        // Root is mounted as overlay composefs, lsblk will throw an error
+        // Ergo, find backing device by looking at mountpoints for /sysroot | /boot
+        return list_dev_current_root();
     }
+
+    return bootc_internal_blockdev::list_dev_by_dir(root);
 }
 
 impl SavedState {
