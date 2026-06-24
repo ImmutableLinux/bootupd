@@ -10,6 +10,7 @@ pub enum Bootloader {
     #[default]
     Grub,
     GrubCC,
+    Systemd,
 }
 
 impl Display for Bootloader {
@@ -17,6 +18,7 @@ impl Display for Bootloader {
         match self {
             Bootloader::Grub => f.write_str("grub"),
             Bootloader::GrubCC => f.write_str("grub-cc"),
+            Bootloader::Systemd => f.write_str("systemd"),
         }
     }
 }
@@ -25,7 +27,8 @@ impl Bootloader {
     fn next(self) -> Option<Self> {
         match self {
             Self::Grub => Some(Self::GrubCC),
-            Self::GrubCC => None,
+            Self::GrubCC => Some(Self::Systemd),
+            Self::Systemd => None,
         }
     }
 
@@ -45,6 +48,7 @@ impl Bootloader {
         match self {
             Bootloader::Grub => "grub2",
             Bootloader::GrubCC => "grub-cc",
+            Bootloader::Systemd => "systemd-boot",
         }
     }
 
@@ -52,6 +56,7 @@ impl Bootloader {
         match component_name {
             "grub2" => Ok(Self::Grub),
             "grub-cc" => Ok(Self::GrubCC),
+            "systemd-boot" => Ok(Self::Systemd),
             _ => anyhow::bail!("Not a valid bootloader: {component_name}"),
         }
     }
@@ -78,6 +83,8 @@ pub(crate) fn get_bootloader() -> Result<Bootloader> {
         Some(info) => {
             if info.to_lowercase().contains("grub cc") {
                 Bootloader::GrubCC
+            } else if info.to_lowercase().contains("systemd-boot") {
+                Bootloader::Systemd
             } else {
                 Bootloader::Grub
             }

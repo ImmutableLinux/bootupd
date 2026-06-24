@@ -323,7 +323,10 @@ impl Component for Efi {
     }
 
     fn is_bootloader_supported(&self, bootloader: Bootloader) -> bool {
-        matches!(bootloader, Bootloader::Grub | Bootloader::GrubCC)
+        matches!(
+            bootloader,
+            Bootloader::Grub | Bootloader::GrubCC | Bootloader::Systemd
+        )
     }
 
     fn query_adopt(&self, devices: &Option<Vec<Device>>) -> Result<Option<Adoptable>> {

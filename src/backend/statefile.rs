@@ -135,7 +135,7 @@ impl SavedState {
                 }
 
                 #[cfg(any(target_arch = "powerpc64", target_arch = "s390x"))]
-                Bootloader::GrubCC => {
+                Bootloader::GrubCC | Bootloader::Systemd => {
                     let arch = if cfg!(target_arch = "powerpc64") {
                         "powerpc64"
                     } else {
@@ -150,7 +150,7 @@ impl SavedState {
                     target_arch = "aarch64",
                     target_arch = "riscv64"
                 ))]
-                Bootloader::GrubCC => {
+                Bootloader::GrubCC | Bootloader::Systemd => {
                     use crate::efi::Efi;
                     let efi = Efi::default();
 
@@ -201,7 +201,7 @@ impl SavedState {
                 bail!("{} already exists", statepath.display());
             }
 
-            Bootloader::GrubCC => {
+            Bootloader::GrubCC | Bootloader::Systemd => {
                 bail!("{} already exists in the ESP", Self::STATEFILE_NAME);
             }
         }
