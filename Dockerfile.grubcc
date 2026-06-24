@@ -1,0 +1,101 @@
+# Build from the current git into a fedora44 container image.
+
+ARG base=quay.io/fedora/fedora-bootc:44
+
+FROM $base as build
+# This installs our package dependencies, and we want to cache it independently of the rest.
+# Basically we don't want changing a .rs file to blow out the cache of packages.
+RUN <<EORUN
+set -xeuo pipefail
+dnf -y install cargo git openssl-devel
+EORUN
+# Now copy the source
+COPY . /build
+WORKDIR /build
+# See https://www.reddit.com/r/rust/comments/126xeyx/exploring_the_problem_of_faster_cargo_docker/
+# We aren't using the full recommendations there, just the simple bits.
+RUN --mount=type=cache,target=/build/target --mount=type=cache,target=/var/roothome \
+    make && make install-all DESTDIR=/out
+
+
+# Get the latest GrubCC binary
+FROM quay.io/fedora/eln:latest AS grub-cc-download
+RUN --mount=type=tmpfs,target=/run --mount=type=tmpfs,target=/tmp <<EOF
+set -eux
+
+# There isn't a generic grub2-efi-cc package that DNF can automatically resolve
+case "$(uname -m)" in
+    x86_64)
+        dnf download grub2-efi-x64-cc
+        ;;
+    aarch64)
+        dnf download grub2-efi-aa64-cc
+        ;;
+    *)
+        echo "Unsupported architecture: $(uname -m)" >&2
+        exit 1
+        ;;
+esac
+
+mv ./*.rpm grub-cc.rpm
+
+EOF
+
+FROM $base
+ARG grubcc
+# Clean out the default to ensure we're using our updated content
+RUN rpm -e bootupd
+COPY --from=build /out/ /
+COPY --from=grub-cc-download /grub-cc.rpm /var/grub-cc.rpm
+# Install bootc from copr
+RUN --mount=type=tmpfs,target=/run --mount=type=tmpfs,target=/tmp <<EORUN
+set -xeuo pipefail
+dnf -y install dnf-plugins-core bootc
+dnf clean all
+rm -rf /var/log
+rm -rf /var/lib
+rm -rf /var/cache
+rm -rf /run/rhsm
+rm -rf /tmp/*
+EORUN
+
+RUN --mount=type=tmpfs,target=/run --mount=type=tmpfs,target=/tmp <<EOF
+
+set -eux
+
+cleanup() {
+    # Clean up temporary files
+    rm -rvf /var/grub-cc*
+}
+
+if [[ ${grubcc} != 1 ]]; then
+    cleanup
+    exit 0
+fi
+
+# Extract and install grub-cc at the correct path
+mkdir /var/grub-cc
+rpm2archive /var/grub-cc.rpm | tar -xvz -C /var/grub-cc
+file=$(find /var/grub-cc -name '*.efi')
+
+# Get the EVR from the RPM filename
+evr=$(rpm -qp --qf '%{EPOCH}:%{VERSION}-%{RELEASE}' /var/grub-cc.rpm)
+
+. /etc/os-release
+
+# Create the expected directory structure at /usr/lib/efi/grub-cc/<evr>/EFI/fedora/
+mkdir -p "/usr/lib/efi/grub-cc/${evr}/EFI/$ID/"
+cp "$file" "/usr/lib/efi/grub-cc/${evr}/EFI/$ID/grubx64.efi"
+
+cleanup
+
+# Regenerate metadata
+bootupctl backend generate-update-metadata -vvv
+
+# Set grub as default
+bootupctl backend set-default-bootloader grub
+
+EOF
+
+# Sanity check this too
+RUN bootc container lint --fatal-warnings
