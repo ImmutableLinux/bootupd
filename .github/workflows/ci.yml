@@ -74,7 +74,7 @@ jobs:
           build_args=()
 
           if [[ "${{ matrix.grubcc }}" == "1" ]]; then
-            dockerfile=Dockerfile.grubcc
+            dockerfile=Dockerfile.bls
             build_args=(--build-arg "grubcc=${{ matrix.grubcc }}")
           fi
 
@@ -143,3 +143,13 @@ jobs:
         run: |
           set -xeuo pipefail
           sudo podman run --rm -v $PWD:/run/src -w /run/src --privileged "$IMG_NAME" tests/tests/generate-update-metadata.sh
+
+      - name: Test GrubCC and SystemdBoot
+        run: |
+          if [[ "${{ matrix.grubcc }}" == "0" ]]; then
+            exit 0
+          fi
+
+          set -xeuo pipefail
+          sudo ./scripts/test-bootloader.sh "$IMG_NAME" "grub-cc"
+          sudo ./scripts/test-bootloader.sh "$IMG_NAME" "systemd"

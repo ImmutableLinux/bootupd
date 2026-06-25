@@ -1,3 +1,4 @@
+# Dockerfile to test GrubCC and systemd-boot
 # Build from the current git into a fedora44 container image.
 
 ARG base=quay.io/fedora/fedora-bootc:44
@@ -42,7 +43,6 @@ mv ./*.rpm grub-cc.rpm
 EOF
 
 FROM $base
-ARG grubcc
 # Clean out the default to ensure we're using our updated content
 RUN rpm -e bootupd
 COPY --from=build /out/ /
@@ -50,7 +50,7 @@ COPY --from=grub-cc-download /grub-cc.rpm /var/grub-cc.rpm
 # Install bootc from copr
 RUN --mount=type=tmpfs,target=/run --mount=type=tmpfs,target=/tmp <<EORUN
 set -xeuo pipefail
-dnf -y install dnf-plugins-core bootc
+dnf -y install dnf-plugins-core bootc systemd-boot tree
 dnf clean all
 rm -rf /var/log
 rm -rf /var/lib
@@ -59,6 +59,29 @@ rm -rf /run/rhsm
 rm -rf /tmp/*
 EORUN
 
+# Install systemd-boot
+RUN --mount=type=tmpfs,target=/run --mount=type=tmpfs,target=/tmp <<EOF
+set -eux
+# epoch for systemd-boot-unsigned is "(none)"
+evr=$(rpm -q --qf '%{EPOCH}:%{VERSION}-%{RELEASE}\n' systemd-boot-unsigned)
+rpm -ql systemd-boot-unsigned
+
+. /etc/os-release
+
+# Create the expected directory structure at /usr/lib/efi/grub-cc/<evr>/EFI/fedora/
+mkdir -p "/usr/lib/efi/systemd-boot/${evr}/EFI/$ID"
+
+if [[ $(uname -m) == x86_64 ]]; then
+    grubName="grubx64.efi"
+else
+    grubName="grubaa64.efi"
+fi
+
+cp /usr/lib/systemd/boot/efi/systemd-boot*.efi "/usr/lib/efi/systemd-boot/${evr}/EFI/$ID/$grubName"
+
+EOF
+
+# Install grub-cc
 RUN --mount=type=tmpfs,target=/run --mount=type=tmpfs,target=/tmp <<EOF
 
 set -eux
@@ -67,11 +90,6 @@ cleanup() {
     # Clean up temporary files
     rm -rvf /var/grub-cc*
 }
-
-if [[ ${grubcc} != 1 ]]; then
-    cleanup
-    exit 0
-fi
 
 # Extract and install grub-cc at the correct path
 mkdir /var/grub-cc
@@ -83,9 +101,15 @@ evr=$(rpm -qp --qf '%{EPOCH}:%{VERSION}-%{RELEASE}' /var/grub-cc.rpm)
 
 . /etc/os-release
 
+if [[ $(uname -m) == x86_64 ]]; then
+    grubName="grubx64.efi"
+else
+    grubName="grubaa64.efi"
+fi
+
 # Create the expected directory structure at /usr/lib/efi/grub-cc/<evr>/EFI/fedora/
 mkdir -p "/usr/lib/efi/grub-cc/${evr}/EFI/$ID/"
-cp "$file" "/usr/lib/efi/grub-cc/${evr}/EFI/$ID/grubx64.efi"
+cp "$file" "/usr/lib/efi/grub-cc/${evr}/EFI/$ID/$grubName"
 
 cleanup
 
