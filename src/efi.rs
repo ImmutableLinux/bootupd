@@ -401,7 +401,9 @@ impl Component for Efi {
             .sysroot
             .open_dir(&updated_path)
             .with_context(|| format!("opening update dir {}", updated_path.display()))?;
-        let updatef = filetree::FileTree::new_from_dir(&updated).context("reading update dir")?;
+        // TODO(Johan-Liebert1): Handle adpot
+        let updatef =
+            filetree::FileTree::new_from_dir(&updated, None).context("reading update dir")?;
 
         let esp_devices = esp_devices.unwrap_or_default();
         for esp in esp_devices {
@@ -509,8 +511,21 @@ impl Component for Efi {
             &src.to_owned()
         };
 
+        // Now that we have multiple bootloaders (all named grubx64.efi/grubaa64.efi
+        // due to that name being baked into the shim), we can't blindly use the key
+        // "fedora/grubx64.efi" to refer to the installed bootloader, hence we ask for
+        // any extra bootloaders to be not included in the FileTree
+        let dirs_to_skip = Bootloader::iter()
+            .filter(|b| *b != bootloader)
+            .map(|b| b.efi_component_name())
+            .collect::<Vec<_>>();
+
         // Get filetree from efi path
-        let ft = crate::filetree::FileTree::new_from_dir(&src_dir.open_dir(efi_path)?)?;
+        let ft = crate::filetree::FileTree::new_from_dir(
+            &src_dir.open_dir(efi_path)?,
+            Some(dirs_to_skip),
+        )?;
+
         if update_firmware {
             if let Some(dev) = device {
                 if let Some(vendordir) =
@@ -532,13 +547,15 @@ impl Component for Efi {
         rootcxt: &RootContext,
         current: &InstalledContent,
     ) -> Result<InstalledContent> {
+        let bootloader = get_bootloader()?;
+
         let currentf = current
             .filetree
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("No filetree for installed EFI found!"))?;
         let sysroot_dir = &rootcxt.sysroot;
         let updatemeta = self
-            .query_update(sysroot_dir, get_bootloader()?)?
+            .query_update(sysroot_dir, bootloader)?
             .expect("update available");
         let updated_path = {
             let efilib_path = rootcxt.path.join(EFILIB);
@@ -555,7 +572,14 @@ impl Component for Efi {
             .sysroot
             .open_dir(&updated_path)
             .with_context(|| format!("opening update dir {}", updated_path.display()))?;
-        let updatef = filetree::FileTree::new_from_dir(&updated).context("reading update dir")?;
+
+        let dirs_to_skip = Bootloader::iter()
+            .filter(|b| *b != bootloader)
+            .map(|b| b.efi_component_name())
+            .collect::<Vec<_>>();
+
+        let updatef = filetree::FileTree::new_from_dir(&updated, Some(dirs_to_skip))
+            .context("reading update dir")?;
         let diff = currentf.diff(&updatef)?;
 
         let Some(esp_devices) = rootcxt.device.find_colocated_esps()? else {
