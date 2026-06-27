@@ -123,13 +123,11 @@ where
     let path_refs: Vec<&Path> = paths.iter().map(|p| p.as_ref()).collect();
 
     //Generate Manifest
-    generate_manifest(sysroot_path, &path_refs)
-        .context("Failed to generate manifest")?;
+    generate_manifest(sysroot_path, &path_refs).context("Failed to generate manifest")?;
 
     let manifest_path = Path::new(sysroot_path).join(MANIFEST_PATH);
     let data = std::fs::read(&manifest_path)
         .with_context(|| format!("Failed to read manifest: {}", manifest_path.display()))?;
-
 
     parse_manifest(&data)
 }

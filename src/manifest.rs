@@ -5,11 +5,9 @@ use std::process::Command;
 use anyhow::{bail, Context, Result};
 use log::debug;
 
-
 //RPM (Fedora, Opensuse)
 const LEGACY_RPMOSTREE_DBPATH: &str = "usr/share/rpm";
 const SYSIMAGE_RPM_DBPATH: &str = "usr/lib/sysimage/rpm";
-
 
 //DPKG (Debian, Ubuntu)
 const LEGACY_APT_DBPATH: &str = "var/lib/dpkg";
@@ -21,7 +19,6 @@ const SYSIMAGE_PACMAN_DBPATH: &str = "usr/lib/sysimage/pacman";
 
 //APK (Alpine Linux)
 const APK_DBPATH: &str = "usr/lib/apk/db/installed";
-
 
 pub(crate) struct ManifestEntry {
     package: String,
@@ -37,7 +34,6 @@ enum PackageManager {
     Pacman,
     Apk,
 }
-
 
 fn is_nonempty_file(path: &Path) -> bool {
     path.metadata().map(|m| m.len() > 0).unwrap_or(false)
@@ -110,7 +106,6 @@ fn detect_package_manager(sysroot_path: &str) -> Result<PackageManager> {
     )
 }
 
-
 fn query_rpm(sysroot_path: &str, file: &Path) -> Result<ManifestEntry> {
     let dbpath = find_rpm_dbpath(sysroot_path)
         .ok_or_else(|| anyhow::anyhow!("RPM database not found in sysroot '{}'", sysroot_path))?;
@@ -135,8 +130,7 @@ fn query_rpm(sysroot_path: &str, file: &Path) -> Result<ManifestEntry> {
         .trim()
         .to_string();
 
-    parse_manifest_entry(&line)
-        .with_context(|| format!("Failed to parse rpm output: '{}'", line))
+    parse_manifest_entry(&line).with_context(|| format!("Failed to parse rpm output: '{}'", line))
 }
 
 fn query_dpkg(sysroot_path: &str, file: &Path) -> Result<ManifestEntry> {
@@ -145,10 +139,7 @@ fn query_dpkg(sysroot_path: &str, file: &Path) -> Result<ManifestEntry> {
         .ok_or_else(|| anyhow::anyhow!("DPKG database not found in sysroot '{}'", sysroot_path))?;
 
     let out = Command::new("dpkg")
-        .arg(format!(
-            "--admindir={}",
-            dbpath.parent().unwrap().display()
-        ))
+        .arg(format!("--admindir={}", dbpath.parent().unwrap().display()))
         .args(["-S", &file.to_string_lossy()])
         .output()
         .context("Failed to run dpkg -S")?;
@@ -167,10 +158,7 @@ fn query_dpkg(sysroot_path: &str, file: &Path) -> Result<ManifestEntry> {
         .ok_or_else(|| anyhow::anyhow!("Failed to parse dpkg -S output: '{}'", stdout.trim()))?;
 
     let ver_out = Command::new("dpkg-query")
-        .arg(format!(
-            "--admindir={}",
-            dbpath.parent().unwrap().display()
-        ))
+        .arg(format!("--admindir={}", dbpath.parent().unwrap().display()))
         .args(["-W", "-f=${Package}-${Version}", &pkg])
         .output()
         .context("Failed to run dpkg-query")?;
@@ -194,8 +182,9 @@ fn query_dpkg(sysroot_path: &str, file: &Path) -> Result<ManifestEntry> {
 }
 
 fn query_pacman(sysroot_path: &str, file: &Path) -> Result<ManifestEntry> {
-    let dbpath = find_pacman_dbpath(sysroot_path)
-        .ok_or_else(|| anyhow::anyhow!("Pacman database not found in sysroot '{}'", sysroot_path))?;
+    let dbpath = find_pacman_dbpath(sysroot_path).ok_or_else(|| {
+        anyhow::anyhow!("Pacman database not found in sysroot '{}'", sysroot_path)
+    })?;
 
     let out = Command::new("pacman")
         .arg(format!("--dbpath={}", dbpath.display()))
@@ -314,11 +303,7 @@ fn parse_manifest_entry(entry: &str) -> Result<ManifestEntry> {
     Ok(ManifestEntry { package, time })
 }
 
-fn query_file_owner(
-    sysroot_path: &str,
-    pm: &PackageManager,
-    file: &Path,
-) -> Result<ManifestEntry> {
+fn query_file_owner(sysroot_path: &str, pm: &PackageManager, file: &Path) -> Result<ManifestEntry> {
     match pm {
         PackageManager::Rpm => query_rpm(sysroot_path, file),
         PackageManager::Dpkg => query_dpkg(sysroot_path, file),
@@ -332,8 +317,7 @@ pub(crate) fn generate_manifest(sysroot_path: &str, files: &[&Path]) -> Result<(
         bail!("No files specified for manifest generation");
     }
 
-    let pm = detect_package_manager(sysroot_path)
-        .context("Failed to detect package manager")?;
+    let pm = detect_package_manager(sysroot_path).context("Failed to detect package manager")?;
     println!("Detected package manager: {:?}", pm);
 
     let mut entries: BTreeMap<String, i64> = BTreeMap::new();
@@ -361,7 +345,11 @@ pub(crate) fn generate_manifest(sysroot_path: &str, files: &[&Path]) -> Result<(
                     .or_insert(entry.time);
             }
             Err(e) => {
-                println!("Warning: failed to query owner of {}: {:#}", file.display(), e);
+                println!(
+                    "Warning: failed to query owner of {}: {:#}",
+                    file.display(),
+                    e
+                );
             }
         }
     }
@@ -520,4 +508,3 @@ mod tests {
         assert!(generate_manifest(dir.path().to_str().unwrap(), &[]).is_err());
     }
 }
-

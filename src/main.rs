@@ -40,13 +40,13 @@ mod freezethaw;
     target_arch = "riscv64"
 ))]
 mod grubconfigs;
+mod manifest;
 mod model;
 mod model_legacy;
 mod ostreeutil;
 mod packagesystem;
 mod sha512string;
 mod util;
-mod manifest;
 
 use clap::crate_name;
 
