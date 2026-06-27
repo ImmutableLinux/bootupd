@@ -111,6 +111,7 @@ fn query_rpm(sysroot_path: &str, file: &Path) -> Result<ManifestEntry> {
         .ok_or_else(|| anyhow::anyhow!("RPM database not found in sysroot '{}'", sysroot_path))?;
 
     let out = Command::new("rpm")
+        .env("LC_ALL", "C")
         .arg(format!("--dbpath={}", dbpath.display()))
         .args(["-qf", "--queryformat", "%{nevra},%{buildtime}"])
         .arg(file)
@@ -134,11 +135,11 @@ fn query_rpm(sysroot_path: &str, file: &Path) -> Result<ManifestEntry> {
 }
 
 fn query_dpkg(sysroot_path: &str, file: &Path) -> Result<ManifestEntry> {
-    // Uzywa tej samej sciezki bazy co detect_package_manager
     let dbpath = find_dpkg_dbpath(sysroot_path)
         .ok_or_else(|| anyhow::anyhow!("DPKG database not found in sysroot '{}'", sysroot_path))?;
 
     let out = Command::new("dpkg")
+        .env("LC_ALL", "C")
         .arg(format!("--admindir={}", dbpath.parent().unwrap().display()))
         .args(["-S", &file.to_string_lossy()])
         .output()
@@ -148,7 +149,7 @@ fn query_dpkg(sysroot_path: &str, file: &Path) -> Result<ManifestEntry> {
         bail!("dpkg -S found no package owning {}", file.display());
     }
 
-    // Format: "pakiet: /sciezka"
+    // Format: "package: /path"
     let stdout = String::from_utf8_lossy(&out.stdout);
     let pkg = stdout
         .lines()
@@ -158,6 +159,7 @@ fn query_dpkg(sysroot_path: &str, file: &Path) -> Result<ManifestEntry> {
         .ok_or_else(|| anyhow::anyhow!("Failed to parse dpkg -S output: '{}'", stdout.trim()))?;
 
     let ver_out = Command::new("dpkg-query")
+        .env("LC_ALL", "C")
         .arg(format!("--admindir={}", dbpath.parent().unwrap().display()))
         .args(["-W", "-f=${Package}-${Version}", &pkg])
         .output()
@@ -168,7 +170,7 @@ fn query_dpkg(sysroot_path: &str, file: &Path) -> Result<ManifestEntry> {
         .trim()
         .to_string();
 
-    // dpkg nie przechowuje buildtime — uzywa mtime pliku jako przyblizenia
+    // dpkg dont use buildtime, use installtime instead
     let time = std::fs::metadata(file)
         .and_then(|m| m.modified())
         .map(|t| {
@@ -187,6 +189,7 @@ fn query_pacman(sysroot_path: &str, file: &Path) -> Result<ManifestEntry> {
     })?;
 
     let out = Command::new("pacman")
+        .env("LC_ALL", "C")
         .arg(format!("--dbpath={}", dbpath.display()))
         .args(["-Qo", &file.to_string_lossy()])
         .output()
@@ -206,8 +209,8 @@ fn query_pacman(sysroot_path: &str, file: &Path) -> Result<ManifestEntry> {
     let ver = words[words.len() - 1];
     let package = format!("{}-{}", pkg, ver);
 
-    // BUILDDATE z <dbpath>/local/<pkg>-<ver>/desc to Unix timestamp
-    // Uzywa tej samej sciezki bazy co wykrycie
+    // BUILDDATE z <dbpath>/local/<pkg>-<ver>/desc is Unix timestamp
+    // Use the same base after detecting
     let desc_path = dbpath
         .join("local")
         .join(format!("{}-{}", pkg, ver))
@@ -245,6 +248,7 @@ fn query_pacman(sysroot_path: &str, file: &Path) -> Result<ManifestEntry> {
 
 fn query_apk(sysroot_path: &str, file: &Path) -> Result<ManifestEntry> {
     let out = Command::new("apk")
+        .env("LC_ALL", "C")
         .arg(format!("--root={}", sysroot_path))
         .args(["info", "--who-owns", &file.to_string_lossy()])
         .output()
@@ -269,17 +273,32 @@ fn query_apk(sysroot_path: &str, file: &Path) -> Result<ManifestEntry> {
         .unwrap_or(&pkg_ver)
         .to_string();
 
-    let ts_out = Command::new("apk")
+    let info_out = Command::new("apk")
+        .env("LC_ALL", "C")
         .arg(format!("--root={}", sysroot_path))
-        .args(["info", "-t", &pkg_name])
+        .args(["info", "-a", &pkg_name])
         .output()
-        .context("Failed to run apk info -t")?;
+        .context("Failed to run apk info -a")?;
 
-    let time = std::str::from_utf8(&ts_out.stdout)
-        .unwrap_or("")
-        .trim()
-        .parse::<i64>()
-        .unwrap_or(0);
+    let time = if info_out.status.success() {
+        let stdout = String::from_utf8_lossy(&info_out.stdout);
+
+        stdout
+            .lines()
+            .find(|l| l.to_ascii_lowercase().contains("build"))
+            .and_then(|l| l.split_once(':'))
+            .map(|(_, v)| v.trim())
+            .and_then(|v| {
+                v.parse::<i64>().ok().or_else(|| {
+                    chrono::DateTime::parse_from_rfc2822(v)
+                        .ok()
+                        .map(|dt| dt.timestamp())
+                })
+            })
+            .unwrap_or(0)
+    } else {
+        0
+    };
 
     Ok(ManifestEntry {
         package: pkg_ver,

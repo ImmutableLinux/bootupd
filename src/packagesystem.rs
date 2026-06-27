@@ -120,10 +120,13 @@ where
     let manifest_path = Path::new(sysroot_path).join(MANIFEST_PATH);
 
     let paths: Vec<_> = _paths.into_iter().collect();
-    let path_refs: Vec<&Path> = paths.iter().map(|p| p.as_ref()).collect();
-
-    //Generate Manifest
-    generate_manifest(sysroot_path, &path_refs).context("Failed to generate manifest")?;
+    
+    if !paths.is_empty() {
+        // If theres a files, generate manifest
+        let path_refs: Vec<&Path> = paths.iter().map(|p| p.as_ref()).collect();
+        generate_manifest(sysroot_path, &path_refs)
+            .context("Failed to generate manifest")?;
+    }
 
     let manifest_path = Path::new(sysroot_path).join(MANIFEST_PATH);
     let data = std::fs::read(&manifest_path)
