@@ -46,6 +46,7 @@ mod ostreeutil;
 mod packagesystem;
 mod sha512string;
 mod util;
+mod manifest;
 
 use clap::crate_name;
 

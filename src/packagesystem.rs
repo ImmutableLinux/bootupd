@@ -9,6 +9,8 @@ use uapi_version::Version;
 
 use crate::model::*;
 
+use crate::manifest::*;
+
 //Manifest file is a alternative to rpm structure, its compatiable with rpm -q --qwertyformat structure. This file need to be generated first and it looks like this:
 // grub2-1:2.12-28.fc42,1710000000 shim-15.8-3,170000000
 const MANIFEST_PATH: &str = "usr/lib/bootupd/manifest";
@@ -116,8 +118,19 @@ where
     T: AsRef<Path>,
 {
     let manifest_path = Path::new(sysroot_path).join(MANIFEST_PATH);
+
+    let paths: Vec<_> = _paths.into_iter().collect();
+    let path_refs: Vec<&Path> = paths.iter().map(|p| p.as_ref()).collect();
+
+    //Generate Manifest
+    generate_manifest(sysroot_path, &path_refs)
+        .context("Failed to generate manifest")?;
+
+    let manifest_path = Path::new(sysroot_path).join(MANIFEST_PATH);
     let data = std::fs::read(&manifest_path)
         .with_context(|| format!("Failed to read manifest: {}", manifest_path.display()))?;
+
+
     parse_manifest(&data)
 }
 
