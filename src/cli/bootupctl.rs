@@ -73,6 +73,8 @@ pub enum CtlBackend {
     Generate(super::bootupd::GenerateOpts),
     #[clap(name = "install", hide = true)]
     Install(super::bootupd::InstallOpts),
+    #[clap(name = "generate-manifest", hide = true)]
+    GenerateManifest(super::bootupd::GenerateManifestOpts),
 }
 
 #[derive(Debug, Parser)]
@@ -108,6 +110,9 @@ impl CtlCommand {
             }
             CtlVerb::Backend(CtlBackend::Install(opts)) => {
                 super::bootupd::DCommand::run_install(opts)
+            }
+            CtlVerb::Backend(CtlBackend::GenerateManifest(opts)) => {
+                super::bootupd::DCommand::run_generate_manifest(opts)
             }
             CtlVerb::MigrateStaticGrubConfig => Self::run_migrate_static_grub_config(),
         }

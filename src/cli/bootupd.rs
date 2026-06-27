@@ -1,4 +1,5 @@
 use crate::bootupd::{self, ConfigMode};
+use crate::manifest::{self, generate_manifest};
 use anyhow::{Context, Result};
 use camino::Utf8Path;
 use cap_std::ambient_authority;
@@ -6,6 +7,7 @@ use cap_std::fs::Dir;
 use cap_std_ext::cap_std;
 use clap::Parser;
 use log::LevelFilter;
+use std::path::{Path, PathBuf};
 
 /// `bootupd` sub-commands.
 #[derive(Debug, Parser)]
@@ -39,6 +41,11 @@ pub enum DVerb {
     GenerateUpdateMetadata(GenerateOpts),
     #[clap(name = "install", about = "Install components")]
     Install(InstallOpts),
+    #[clap(
+        name = "generate-manifest",
+        about = "Generate manifest for grub and shim packages (supported distros: Ubuntu/Debian, Arch Linux, Fedora/CentOS, OpenSuse and Alpine Linux"
+    )]
+    GenerateManifest(GenerateManifestOpts),
 }
 
 #[derive(Debug, Parser)]
@@ -92,12 +99,24 @@ pub struct GenerateOpts {
     sysroot: Option<String>,
 }
 
+#[derive(Debug, Parser)]
+pub struct GenerateManifestOpts {
+    /// Physical root mountpoint
+    #[clap(value_parser)]
+    sysroot: Option<String>,
+
+    /// Grub or shim filepaths
+    #[clap(value_parser)]
+    files: Vec<PathBuf>,
+}
+
 impl DCommand {
     /// Run CLI application.
     pub fn run(self) -> Result<()> {
         match self.cmd {
             DVerb::Install(opts) => Self::run_install(opts),
             DVerb::GenerateUpdateMetadata(opts) => Self::run_generate_meta(opts),
+            DVerb::GenerateManifest(opts) => Self::run_generate_manifest(opts),
         }
     }
 
@@ -108,6 +127,17 @@ impl DCommand {
             anyhow::bail!("Using a non-default sysroot is not supported: {}", sysroot);
         }
         bootupd::generate_update_metadata(sysroot).context("generating metadata failed")?;
+        Ok(())
+    }
+
+    /// Runner for 'generate-manifest' verb
+    pub(crate) fn run_generate_manifest(opts: GenerateManifestOpts) -> Result<()> {
+        let sysroot = opts.sysroot.as_deref().unwrap_or("/");
+        let path_refs: Vec<&Path> = opts.files.iter().map(|p| p.as_path()).collect();
+        if sysroot != "/" {
+            anyhow::bail!("Using a non-default sysroot is not supported: {}", sysroot);
+        }
+        manifest::generate_manifest(sysroot, &path_refs)?;
         Ok(())
     }
 

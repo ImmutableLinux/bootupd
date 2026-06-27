@@ -337,7 +337,7 @@ pub(crate) fn generate_manifest(sysroot_path: &str, files: &[&Path]) -> Result<(
     }
 
     let pm = detect_package_manager(sysroot_path).context("Failed to detect package manager")?;
-    println!("Detected package manager: {:?}", pm);
+    debug!("Detected package manager: {:?}", pm);
 
     let mut entries: BTreeMap<String, i64> = BTreeMap::new();
 
