@@ -79,14 +79,9 @@ fn parse_manifest(data: &[u8]) -> Result<ContentMetadata> {
             let ts_str = parts
                 .next()
                 .ok_or_else(|| anyhow::anyhow!("Missing buildtime in entry: {}", s))?;
-            let secs = ts_str
-                .trim()
-                .parse::<i64>()
-                .with_context(|| format!("Invalid buildtime integer in entry: {}", s))?;
-            let ts = Utc
-                .timestamp_opt(secs, 0)
-                .single()
-                .ok_or_else(|| anyhow::anyhow!("Invalid timestamp value: {}", secs))?;
+            let ts = DateTime::parse_from_str(ts_str, "%s")
+                .with_context(|| format!("Invalid buildtime in entry: {}", s))?
+                .with_timezone(&Utc);
             Ok((name, ts))
         })
         .collect::<Result<BTreeMap<&str, DateTime<Utc>>>>()?;
@@ -95,7 +90,12 @@ fn parse_manifest(data: &[u8]) -> Result<ContentMetadata> {
         bail!("Manifest contains no entries");
     }
 
-    let largest_timestamp = pkgs.values().max().expect("pkgs is non-empty");
+    let largest_timestamp = pkgs
+        .values()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .last()
+        .expect("pkgs is non-empty");
 
     let version = pkgs.keys().cloned().collect::<Vec<_>>().join(",");
 
