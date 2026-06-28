@@ -79,9 +79,12 @@ fn parse_manifest(data: &[u8]) -> Result<ContentMetadata> {
             let ts_str = parts
                 .next()
                 .ok_or_else(|| anyhow::anyhow!("Missing buildtime in entry: {}", s))?;
-            let secs = ts_str.trim().parse::<i64>()
+            let secs = ts_str
+                .trim()
+                .parse::<i64>()
                 .with_context(|| format!("Invalid buildtime integer in entry: {}", s))?;
-            let ts = Utc.timestamp_opt(secs, 0)
+            let ts = Utc
+                .timestamp_opt(secs, 0)
                 .single()
                 .ok_or_else(|| anyhow::anyhow!("Invalid timestamp value: {}", secs))?;
             Ok((name, ts))
@@ -92,10 +95,7 @@ fn parse_manifest(data: &[u8]) -> Result<ContentMetadata> {
         bail!("Manifest contains no entries");
     }
 
-    let largest_timestamp = pkgs
-        .values()
-        .max()
-        .expect("pkgs is non-empty");
+    let largest_timestamp = pkgs.values().max().expect("pkgs is non-empty");
 
     let version = pkgs.keys().cloned().collect::<Vec<_>>().join(",");
 
