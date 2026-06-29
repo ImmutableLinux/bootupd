@@ -323,6 +323,10 @@ impl Component for Efi {
     }
 
     fn is_bootloader_supported(&self, bootloader: Bootloader) -> bool {
+        #[cfg(not(efi_arch))]
+        return matches!(bootloader, Bootloader::Grub);
+
+        #[cfg(efi_arch)]
         matches!(
             bootloader,
             Bootloader::Grub | Bootloader::GrubCC | Bootloader::Systemd
@@ -883,6 +887,7 @@ fn generate_meta_from_usr_efi(sysroot_path: &Utf8Path) -> Result<ContentMetadata
         timestamp: get_metadata_timestamp()?,
         version: packages.join(","),
         versions: Some(modules_vec),
+        #[cfg(efi_arch)]
         default_bootloader: None,
     };
 
@@ -1117,6 +1122,7 @@ Boot0003* test";
     }
 
     #[test]
+    #[cfg(efi_arch)]
     fn test_get_efi_component_from_usr() -> Result<()> {
         let tmpdir: &tempfile::TempDir = &tempfile::tempdir()?;
         let tpath = tmpdir.path();

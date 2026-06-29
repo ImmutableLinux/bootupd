@@ -40,6 +40,7 @@ pub enum DVerb {
     GenerateUpdateMetadata(GenerateOpts),
     #[clap(name = "install", about = "Install components")]
     Install(InstallOpts),
+    #[cfg(efi_arch)]
     SetDefaultBootloader(DefaultBootloaderOpts),
 }
 
@@ -114,6 +115,7 @@ impl DCommand {
         match self.cmd {
             DVerb::Install(opts) => Self::run_install(opts),
             DVerb::GenerateUpdateMetadata(opts) => Self::run_generate_meta(opts),
+            #[cfg(efi_arch)]
             DVerb::SetDefaultBootloader(opts) => Self::set_default_bootloader(opts),
         }
     }
@@ -130,12 +132,6 @@ impl DCommand {
 
     /// Runner for `install` verb.
     pub(crate) fn run_install(opts: InstallOpts) -> Result<()> {
-        if !matches!(opts.bootloader, Some(Bootloader::Grub) | None)
-            && cfg!(any(target_arch = "powerpc64", target_arch = "s390x"))
-        {
-            anyhow::bail!("Only Grub is supported for powerpc64 and s390x");
-        }
-
         let configmode = if opts.write_uuid {
             ConfigMode::WithUUID
         } else if opts.with_static_configs {
@@ -162,6 +158,7 @@ impl DCommand {
         Ok(())
     }
 
+    #[cfg(efi_arch)]
     pub(crate) fn set_default_bootloader(opts: DefaultBootloaderOpts) -> Result<()> {
         let all_components = crate::bootupd::get_components();
         let target_components: Vec<_> = all_components.values().collect();

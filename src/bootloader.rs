@@ -1,7 +1,7 @@
 use anyhow::Result;
 use fn_error_context::context;
 use serde::{Deserialize, Serialize};
-use std::{fmt::Display, sync::OnceLock};
+use std::fmt::Display;
 
 #[derive(
     Debug, Default, Copy, Clone, clap::ValueEnum, PartialEq, Eq, Hash, Serialize, Deserialize,
@@ -9,7 +9,9 @@ use std::{fmt::Display, sync::OnceLock};
 pub enum Bootloader {
     #[default]
     Grub,
+    #[cfg(efi_arch)]
     GrubCC,
+    #[cfg(efi_arch)]
     Systemd,
 }
 
@@ -17,18 +19,28 @@ impl Display for Bootloader {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Bootloader::Grub => f.write_str("grub"),
+            #[cfg(efi_arch)]
             Bootloader::GrubCC => f.write_str("grub-cc"),
+            #[cfg(efi_arch)]
             Bootloader::Systemd => f.write_str("systemd"),
         }
     }
 }
 
 impl Bootloader {
+    #[cfg(efi_arch)]
     fn next(self) -> Option<Self> {
         match self {
             Self::Grub => Some(Self::GrubCC),
             Self::GrubCC => Some(Self::Systemd),
             Self::Systemd => None,
+        }
+    }
+
+    #[cfg(not(efi_arch))]
+    fn next(self) -> Option<Self> {
+        match self {
+            Self::Grub => None,
         }
     }
 
@@ -47,31 +59,37 @@ impl Bootloader {
     pub(crate) fn efi_component_name(&self) -> &'static str {
         match self {
             Bootloader::Grub => "grub2",
+            #[cfg(efi_arch)]
             Bootloader::GrubCC => "grub-cc",
+            #[cfg(efi_arch)]
             Bootloader::Systemd => "systemd-boot",
         }
     }
 
+    #[cfg(efi_arch)]
     pub(crate) fn try_from_efi_component_name(component_name: &str) -> Result<Self> {
         match component_name {
             "grub2" => Ok(Self::Grub),
+            #[cfg(efi_arch)]
             "grub-cc" => Ok(Self::GrubCC),
+            #[cfg(efi_arch)]
             "systemd-boot" => Ok(Self::Systemd),
             _ => anyhow::bail!("Not a valid bootloader: {component_name}"),
         }
     }
 }
 
-#[cfg(any(target_arch = "powerpc64", target_arch = "s390x"))]
+#[cfg(not(efi_arch))]
 #[context("Getting bootloader")]
 pub(crate) fn get_bootloader() -> Result<Bootloader> {
     Ok(Bootloader::Grub)
 }
 
-#[cfg(not(any(target_arch = "powerpc64", target_arch = "s390x")))]
+#[cfg(efi_arch)]
 #[context("Getting bootloader")]
 pub(crate) fn get_bootloader() -> Result<Bootloader> {
     use crate::efi::get_loader_info;
+    use std::sync::OnceLock;
 
     static BOOTLOADER: OnceLock<Bootloader> = OnceLock::new();
 

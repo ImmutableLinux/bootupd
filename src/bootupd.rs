@@ -94,6 +94,7 @@ pub(crate) fn install(opts: &InstallOpts, devices: &[Device], configs: ConfigMod
         anyhow::bail!("No components specified");
     }
 
+    #[cfg(efi_arch)]
     let bootloader = match opts.bootloader {
         // CLI overrides anything else
         Some(b) => b,
@@ -150,6 +151,9 @@ pub(crate) fn install(opts: &InstallOpts, devices: &[Device], configs: ConfigMod
             }
         }
     };
+
+    #[cfg(not(efi_arch))]
+    let bootloader = Bootloader::Grub;
 
     let mut state = SavedState::default();
     let mut installed_efi_vendor = None;
@@ -300,6 +304,8 @@ fn get_static_config_meta() -> Result<ContentMetadata> {
         timestamp: self_bin_meta.modified()?.into(),
         version: crate_version!().into(),
         versions: None,
+
+        #[cfg(efi_arch)]
         default_bootloader: None,
     };
     Ok(self_meta)

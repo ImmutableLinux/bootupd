@@ -26,6 +26,7 @@ pub(crate) struct ContentMetadata {
     pub(crate) versions: Option<Vec<Module>>,
     /// The default bootloader to install if at install time no bootloader option is
     /// provided
+    #[cfg(efi_arch)]
     pub(crate) default_bootloader: Option<Bootloader>,
 }
 
@@ -39,6 +40,7 @@ impl ContentMetadata {
     }
 
     /// Returns bootloaders are available for install
+    #[cfg(efi_arch)]
     pub(crate) fn num_bootloader_available(&self) -> Vec<Bootloader> {
         let mut available = vec![];
 
@@ -53,6 +55,7 @@ impl ContentMetadata {
         return available;
     }
 
+    #[cfg(efi_arch)]
     pub(crate) fn bootloader_available(&mut self, bootloader: Bootloader) -> bool {
         self.version
             .split(",")
@@ -184,12 +187,14 @@ mod test {
             timestamp: t,
             version: "grub2-efi-ia32-1:2.12-21.fc41.x86_64,grub2-efi-x64-1:2.12-21.fc41.x86_64,shim-ia32-15.8-3.x86_64,shim-x64-15.8-3.x86_64".into(),
             versions: None,
+            #[cfg(efi_arch)]
             default_bootloader: None,
         };
         let b = ContentMetadata {
             timestamp: t + Duration::try_seconds(1).unwrap(),
             version: "grub2-efi-ia32-1:2.12-28.fc41.x86_64,grub2-efi-x64-1:2.12-28.fc41.x86_64,shim-ia32-15.8-3.x86_64,shim-x64-15.8-3.x86_64".into(),
             versions: None,
+            #[cfg(efi_arch)]
             default_bootloader: None,
         };
         assert_eq!(a.can_upgrade_to(&b), Ordering::Less); // means upgradable
@@ -209,6 +214,7 @@ mod test {
                     rpm_evr: "15.8-3".into(),
                 },
             ]),
+            #[cfg(efi_arch)]
             default_bootloader: None,
         };
         let b = ContentMetadata {
@@ -224,6 +230,7 @@ mod test {
                     rpm_evr: "15.8-3".into(),
                 },
             ]),
+            #[cfg(efi_arch)]
             default_bootloader: None,
         };
         assert_eq!(a.can_upgrade_to(&b), Ordering::Less); // means upgradable

@@ -74,6 +74,7 @@ pub enum CtlBackend {
     #[clap(name = "install", hide = true)]
     Install(super::bootupd::InstallOpts),
     #[clap(hide = true)]
+    #[cfg(efi_arch)]
     SetDefaultBootloader(super::bootupd::DefaultBootloaderOpts),
 }
 
@@ -111,6 +112,7 @@ impl CtlCommand {
             CtlVerb::Backend(CtlBackend::Install(opts)) => {
                 super::bootupd::DCommand::run_install(opts)
             }
+            #[cfg(efi_arch)]
             CtlVerb::Backend(CtlBackend::SetDefaultBootloader(opts)) => {
                 super::bootupd::DCommand::set_default_bootloader(opts)
             }

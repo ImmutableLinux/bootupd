@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 
 use bootc_internal_blockdev::Device;
 
+#[cfg(efi_arch)]
 use crate::cli::bootupd::DefaultBootloaderOpts;
 use crate::{bootloader::Bootloader, bootupd::RootContext, model::*};
 
@@ -141,6 +142,7 @@ pub(crate) trait Component {
         Path::new(&format!("{}.json", self.name())).into()
     }
 
+    #[cfg(efi_arch)]
     fn set_default_bootloader(&self, opts: &DefaultBootloaderOpts) -> Result<()> {
         if !self.is_bootloader_supported(opts.bootloader) {
             anyhow::bail!("{} not supported for {}", opts.bootloader, self.name());
@@ -167,6 +169,7 @@ pub(crate) trait Component {
         Ok(())
     }
 
+    #[cfg(efi_arch)]
     fn get_default_bootloader(&self, root: &Dir) -> Result<Option<Bootloader>> {
         let update_meta = self
             .get_component_update(&root, None)?
@@ -242,6 +245,7 @@ pub(crate) fn query_adopt_state() -> Result<Option<Adoptable>> {
             timestamp: coreos_aleph.ts,
             version: coreos_aleph.aleph.version,
             versions: None,
+            #[cfg(efi_arch)]
             default_bootloader: None,
         };
         log::trace!("Adoptable: {:?}", &meta);
@@ -260,6 +264,7 @@ pub(crate) fn query_adopt_state() -> Result<Option<Adoptable>> {
             timestamp,
             version: "unknown".to_string(),
             versions: None,
+            #[cfg(efi_arch)]
             default_bootloader: None,
         };
         return Ok(Some(Adoptable {
@@ -273,7 +278,6 @@ pub(crate) fn query_adopt_state() -> Result<Option<Adoptable>> {
 #[cfg(test)]
 mod tests {
     use cap_std::fs::{DirBuilder, DirBuilderExt, Permissions, PermissionsExt};
-    use chrono::Utc;
 
     use super::*;
 
@@ -353,7 +357,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg(efi_arch)]
     fn test_set_default_bootloader() -> Result<()> {
+        use chrono::Utc;
+
         let td = tempfile::tempdir()?;
         let sysroot = td.path().to_str().unwrap().to_string();
         let tdir = Dir::open_ambient_dir(&sysroot, ambient_authority())?;

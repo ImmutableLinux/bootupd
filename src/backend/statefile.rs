@@ -2,7 +2,7 @@
 
 use crate::bootloader::Bootloader;
 use crate::bootupd::list_dev_current_root;
-use crate::freezethaw::fsfreeze_thaw_cycle;
+
 use crate::model::SavedState;
 use crate::util::SignalTerminationGuard;
 use anyhow::{bail, Context, Result};
@@ -134,22 +134,7 @@ impl SavedState {
                     }
                 }
 
-                #[cfg(any(target_arch = "powerpc64", target_arch = "s390x"))]
-                Bootloader::GrubCC | Bootloader::Systemd => {
-                    let arch = if cfg!(target_arch = "powerpc64") {
-                        "powerpc64"
-                    } else {
-                        "s390x"
-                    };
-
-                    anyhow::bail!("Only Grub is supported for {arch}");
-                }
-
-                #[cfg(any(
-                    target_arch = "x86_64",
-                    target_arch = "aarch64",
-                    target_arch = "riscv64"
-                ))]
+                #[cfg(efi_arch)]
                 Bootloader::GrubCC | Bootloader::Systemd => {
                     use crate::efi::Efi;
                     let efi = Efi::default();
@@ -201,6 +186,7 @@ impl SavedState {
                 bail!("{} already exists", statepath.display());
             }
 
+            #[cfg(efi_arch)]
             Bootloader::GrubCC | Bootloader::Systemd => {
                 bail!("{} already exists in the ESP", Self::STATEFILE_NAME);
             }
@@ -211,6 +197,7 @@ impl SavedState {
 /// Write-lock guard for statefile, protecting against concurrent state updates.
 #[derive(Debug)]
 pub(crate) struct StateLockGuard {
+    #[allow(dead_code)]
     pub(crate) sysroot_path: Utf8PathBuf,
     pub(crate) sysroot: Dir,
     #[allow(dead_code)]
@@ -234,29 +221,19 @@ impl StateLockGuard {
         return Ok(());
     }
 
-    #[cfg(any(target_arch = "powerpc64", target_arch = "s390x"))]
     #[context("Updating state")]
+    #[cfg(not(efi_arch))]
     pub(crate) fn update_state(
         &mut self,
         state: &SavedState,
-        bootloader: Bootloader,
+        _bootloader: Bootloader,
     ) -> Result<()> {
-        let arch = if cfg!(target_arch = "powerpc64") {
-            "powerpc64"
-        } else {
-            "s390x"
-        };
-
-        if bootloader != Bootloader::Grub {
-            anyhow::bail!("Found bootloader: {bootloader}. Only Grub is supported for {arch}");
-        }
-
-        self.write_grub_statefile(state)
+        return self.write_grub_statefile(state);
     }
 
     /// Atomically replace the on-disk state with a new version.
-    #[cfg(not(any(target_arch = "powerpc64", target_arch = "s390x")))]
     #[context("Updating state")]
+    #[cfg(efi_arch)]
     pub(crate) fn update_state(
         &mut self,
         state: &SavedState,
@@ -267,6 +244,7 @@ impl StateLockGuard {
         }
 
         use crate::efi::Efi;
+        use crate::freezethaw::fsfreeze_thaw_cycle;
 
         let device = get_parent_device(&self.sysroot)?;
         let all_esps = device
