@@ -412,7 +412,7 @@ mod tests {
     fn make_sysroot_with_pacman(dir: &TempDir) {
         let dbpath = dir.path().join(LEGACY_PACMAN_DBPATH);
         std::fs::create_dir_all(&dbpath).unwrap();
-        // Musi byc niepusty zeby is_nonempty_dir zwrocilo true
+        // Must be empty
         std::fs::write(dbpath.join("dummy"), b"dummy").unwrap();
     }
 
@@ -471,7 +471,7 @@ mod tests {
     #[test]
     fn test_find_rpm_dbpath_sysimage_wins() {
         let dir = TempDir::new().unwrap();
-        // Oba istnieja — sysimage powinien wygrac (jest pierwszy w liscie)
+        // Two exists, but sysimage is first one
         let sysimage = dir.path().join(SYSIMAGE_RPM_DBPATH);
         std::fs::create_dir_all(&sysimage).unwrap();
         std::fs::write(sysimage.join("Packages"), b"dummy").unwrap();
@@ -486,7 +486,7 @@ mod tests {
     #[test]
     fn test_find_rpm_dbpath_falls_back_to_legacy() {
         let dir = TempDir::new().unwrap();
-        // Tylko legacy istnieje
+        // Only legacy exists
         let legacy = dir.path().join(LEGACY_RPMOSTREE_DBPATH);
         std::fs::create_dir_all(&legacy).unwrap();
         std::fs::write(legacy.join("Packages"), b"dummy").unwrap();
