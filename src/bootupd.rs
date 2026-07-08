@@ -2,7 +2,7 @@
 use crate::bios;
 use crate::bootloader::{get_bootloader, Bootloader};
 use crate::cli::bootupd::InstallOpts;
-use crate::component;
+use crate::component::{self, ComponentType};
 use crate::component::{Component, ValidationResult};
 use crate::coreos;
 #[cfg(any(
@@ -104,17 +104,21 @@ pub(crate) fn install(opts: &InstallOpts, devices: &[Device], configs: ConfigMod
             let mut bios_default = None;
 
             for c in &target_components {
-                if c.name() == "EFI" {
-                    efi_default = c.get_default_bootloader(&source_root_dir)?;
+                use crate::component::ComponentType;
 
-                    if efi_default.is_none() {
-                        // We don't want to filter any bootloader
-                        efi_component_update = c.get_component_update(&source_root_dir, None)?;
+                match c.component_type() {
+                    ComponentType::Bios => {
+                        bios_default = Some(Bootloader::Grub);
                     }
-                }
+                    ComponentType::Efi => {
+                        efi_default = c.get_default_bootloader(&source_root_dir)?;
 
-                if c.name() == "BIOS" {
-                    bios_default = c.get_default_bootloader(&source_root_dir)?;
+                        if efi_default.is_none() {
+                            // We don't want to filter any bootloader
+                            efi_component_update =
+                                c.get_component_update(&source_root_dir, None)?;
+                        }
+                    }
                 }
             }
 
@@ -160,7 +164,7 @@ pub(crate) fn install(opts: &InstallOpts, devices: &[Device], configs: ConfigMod
 
     for &component in target_components.iter() {
         // skip for BIOS if no devices specified
-        if component.name() == "BIOS" && devices.is_empty() {
+        if component.component_type() == ComponentType::Bios && devices.is_empty() {
             println!(
                 "Skip installing component {} without target device",
                 component.name()
@@ -193,7 +197,7 @@ pub(crate) fn install(opts: &InstallOpts, devices: &[Device], configs: ConfigMod
         let devices_to_install: Vec<Option<&Device>> = if devices.is_empty() {
             // No devices specified: install once with auto-detection (None).
             vec![None]
-        } else if component.name() == "EFI" {
+        } else if component.component_type() == ComponentType::Efi {
             // For EFI, only install to devices that have an ESP partition.
             let esp_devices: Vec<&Device> = devices
                 .iter()

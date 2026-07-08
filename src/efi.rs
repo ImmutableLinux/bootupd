@@ -319,7 +319,11 @@ fn skip_systemd_bootloaders() -> bool {
 
 impl Component for Efi {
     fn name(&self) -> &'static str {
-        "EFI"
+        self.component_type().into()
+    }
+
+    fn component_type(&self) -> ComponentType {
+        ComponentType::Efi
     }
 
     fn is_bootloader_supported(&self, bootloader: Bootloader) -> bool {

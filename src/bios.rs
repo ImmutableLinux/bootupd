@@ -100,7 +100,11 @@ impl Bios {
 
 impl Component for Bios {
     fn name(&self) -> &'static str {
-        "BIOS"
+        self.component_type().into()
+    }
+
+    fn component_type(&self) -> ComponentType {
+        ComponentType::Bios
     }
 
     fn is_bootloader_supported(&self, bootloader: Bootloader) -> bool {

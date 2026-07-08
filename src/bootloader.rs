@@ -3,11 +3,8 @@ use fn_error_context::context;
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
 
-#[derive(
-    Debug, Default, Copy, Clone, clap::ValueEnum, PartialEq, Eq, Hash, Serialize, Deserialize,
-)]
+#[derive(Debug, Copy, Clone, clap::ValueEnum, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Bootloader {
-    #[default]
     Grub,
     #[cfg(efi_arch)]
     GrubCC,

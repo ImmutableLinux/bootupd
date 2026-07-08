@@ -26,6 +26,27 @@ pub(crate) enum ValidationResult {
     Errors(Vec<String>),
 }
 
+#[derive(PartialEq, Eq, Clone, Copy)]
+pub(crate) enum ComponentType {
+    Bios,
+    Efi,
+}
+
+impl From<ComponentType> for &'static str {
+    fn from(val: ComponentType) -> Self {
+        match val {
+            ComponentType::Bios => "BIOS",
+            ComponentType::Efi => "EFI",
+        }
+    }
+}
+
+impl std::fmt::Display for ComponentType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str((*self).into())
+    }
+}
+
 /// A bootloader subsystem (EFI or BIOS) that can be installed, updated, and validated.
 ///
 /// Components encapsulate platform-specific bootloader management. Each implementation
@@ -35,6 +56,10 @@ pub(crate) trait Component {
     /// Returns the name of the component; this will be used for serialization
     /// and should remain stable.
     fn name(&self) -> &'static str;
+
+    /// Returns the type of the component as an enum
+    /// Prefer this over [`Component::name`]
+    fn component_type(&self) -> ComponentType;
 
     /// In an operating system whose initially booted disk image is not
     /// using bootupd, detect whether it looks like the component exists
@@ -313,10 +338,10 @@ mod tests {
         let all_components = crate::bootupd::get_components();
         let target_components: Vec<_> = all_components.values().collect();
         for &component in target_components.iter() {
-            if component.name() == "BIOS" {
+            if component.component_type() == ComponentType::Bios {
                 assert_eq!(component.get_efi_vendor(tdp)?, None);
             }
-            if component.name() == "EFI" {
+            if component.component_type() == ComponentType::Efi {
                 let x = component.get_efi_vendor(tdp);
                 assert_eq!(x.is_err(), true);
                 efi.remove_dir_all("centos")?;

@@ -88,7 +88,6 @@ pub(crate) struct InstallOpts {
     pub(crate) auto: bool,
 
     /// The bootloader to use
-    /// Defaults to Grub
     #[clap(long)]
     pub(crate) bootloader: Option<Bootloader>,
 }
