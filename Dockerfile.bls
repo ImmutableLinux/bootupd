@@ -68,7 +68,7 @@ rpm -ql systemd-boot-unsigned
 
 . /etc/os-release
 
-# Create the expected directory structure at /usr/lib/efi/grub-cc/<evr>/EFI/fedora/
+# Create the expected directory structure at /usr/lib/efi/systemd-boot/<evr>/EFI/fedora/
 mkdir -p "/usr/lib/efi/systemd-boot/${evr}/EFI/$ID"
 
 if [[ $(uname -m) == x86_64 ]]; then

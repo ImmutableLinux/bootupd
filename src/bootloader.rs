@@ -95,15 +95,11 @@ pub(crate) fn get_bootloader() -> Result<Bootloader> {
     }
 
     let bootloader = match get_loader_info() {
-        Some(info) => {
-            if info.to_lowercase().contains("grub cc") {
-                Bootloader::GrubCC
-            } else if info.to_lowercase().contains("systemd-boot") {
-                Bootloader::Systemd
-            } else {
-                Bootloader::Grub
-            }
-        }
+        Some(info) => match info.to_lowercase() {
+            i if i.contains("grub cc") => Bootloader::GrubCC,
+            i if i.contains("systemd-boot") => Bootloader::Systemd,
+            _ => Bootloader::Grub,
+        },
         None => Bootloader::Grub,
     };
 

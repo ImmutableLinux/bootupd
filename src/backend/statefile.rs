@@ -252,11 +252,11 @@ impl StateLockGuard {
             .context("Searching for ESP")?
             .ok_or_else(|| anyhow::anyhow!("ESP not found"))?;
 
-        let efi = Efi::default();
-
         let serialized_state = serde_json::to_vec(state).context("Serializing state")?;
 
         for esp in all_esps {
+            let efi = Efi::default();
+
             let mounted = efi
                 .ensure_mounted_esp(self.sysroot_path.as_std_path(), Path::new(&esp.path()))
                 .context("Mounting ESP")?;
@@ -273,7 +273,8 @@ impl StateLockGuard {
             // Do the sync before unmount
             fsfreeze_thaw_cycle(dir.reopen_as_ownedfd()?)?;
             drop(dir);
-            efi.unmount().context("unmount after update")?;
+            // This takes care of not unmounting ESP if it was already mounted
+            drop(efi);
         }
 
         Ok(())

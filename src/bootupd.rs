@@ -130,8 +130,7 @@ pub(crate) fn install(opts: &InstallOpts, devices: &[Device], configs: ConfigMod
                 //
                 //  We can't install GrubCC for BIOS as it's not supported
                 //  So we just default to installing GrubCC
-                (Some(_), Some(eb)) => eb,
-                (None, Some(eb)) => eb,
+                (_, Some(eb)) => eb,
                 (Some(bb), None) => bb,
 
                 // We still can get the bootloader by reading in the EFI component update
@@ -142,7 +141,7 @@ pub(crate) fn install(opts: &InstallOpts, devices: &[Device], configs: ConfigMod
                         anyhow::bail!("Could not determine bootloader. Default bootloader not set")
                     };
 
-                    let available_bootloaders = efi_component_update.num_bootloader_available();
+                    let available_bootloaders = efi_component_update.available_bootloaders();
 
                     if available_bootloaders.len() != 1 {
                         anyhow::bail!(

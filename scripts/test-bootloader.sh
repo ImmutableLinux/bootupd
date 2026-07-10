@@ -15,6 +15,10 @@ case $BOOTLOADER in
     grub)
         EFI_DIR_NAME=grub2
         ;;
+    *)
+        echo "Unknown bootloader $BOOTLOADER"
+        exit 1
+        ;;
 esac
 
 cat <<-EOF > sfdisk-buf

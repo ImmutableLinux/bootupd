@@ -183,7 +183,7 @@ pub(crate) trait Component {
             .get_component_update(&root, None)?
             .ok_or_else(|| anyhow::anyhow!("Expected to get update metadata"))?;
 
-        if !update_meta.bootloader_available(opts.bootloader) {
+        if !update_meta.is_bootloader_available(opts.bootloader) {
             anyhow::bail!("{} is not present in metadata", opts.bootloader);
         }
 
