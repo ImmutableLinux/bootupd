@@ -75,6 +75,8 @@ fn rpm_parse_metadata(stdout: &[u8]) -> Result<ContentMetadata> {
         timestamp: **largest_timestamp,
         version,
         versions: Some(modules_vec),
+        #[cfg(efi_arch)]
+        default_bootloader: None,
     })
 }
 

@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 
+use crate::bootloader::Bootloader;
 use crate::packagesystem::*;
 
 /// The directory where updates are stored
@@ -23,6 +24,10 @@ pub(crate) struct ContentMetadata {
     pub(crate) version: String,
     /// Transfer version into Module struct list
     pub(crate) versions: Option<Vec<Module>>,
+    /// The default bootloader to install if at install time no bootloader option is
+    /// provided
+    #[cfg(efi_arch)]
+    pub(crate) default_bootloader: Option<Bootloader>,
 }
 
 impl ContentMetadata {
@@ -31,6 +36,51 @@ impl ContentMetadata {
             compare_package_slices(self_versions, target_versions)
         } else {
             compare_package_versions(&self.version, &target.version)
+        }
+    }
+
+    /// Returns bootloaders are available for install
+    #[cfg(efi_arch)]
+    pub(crate) fn available_bootloaders(&self) -> Vec<Bootloader> {
+        let mut available = vec![];
+
+        if let Some(versions) = &self.versions {
+            for version in versions {
+                if let Ok(b) = Bootloader::try_from_efi_component_name(&version.name) {
+                    available.push(b);
+                }
+            }
+        }
+
+        return available;
+    }
+
+    #[cfg(efi_arch)]
+    pub(crate) fn is_bootloader_available(&mut self, bootloader: Bootloader) -> bool {
+        self.version
+            .split(",")
+            .any(|v| v.starts_with(bootloader.efi_component_name()))
+    }
+
+    pub(crate) fn filter_bootloader(&mut self, bootloader: Bootloader) {
+        let to_remove = Bootloader::iter()
+            .filter(|b| *b != bootloader)
+            .map(|b| b.efi_component_name())
+            .collect::<Vec<_>>();
+
+        // Version is of type "<bootloader-name>-<rpm_evr>,<bootloader-name>-<rpm_evr>"
+        self.version = self
+            .version
+            .split(",")
+            .filter(|v| {
+                // Keep everything that is NOT in to_remove
+                !to_remove.iter().any(|b| v.starts_with(b))
+            })
+            .collect::<Vec<&str>>()
+            .join(",");
+
+        if let Some(versions) = &mut self.versions {
+            versions.retain(|v| !to_remove.contains(&v.name.as_str()));
         }
     }
 }
@@ -137,11 +187,15 @@ mod test {
             timestamp: t,
             version: "grub2-efi-ia32-1:2.12-21.fc41.x86_64,grub2-efi-x64-1:2.12-21.fc41.x86_64,shim-ia32-15.8-3.x86_64,shim-x64-15.8-3.x86_64".into(),
             versions: None,
+            #[cfg(efi_arch)]
+            default_bootloader: None,
         };
         let b = ContentMetadata {
             timestamp: t + Duration::try_seconds(1).unwrap(),
             version: "grub2-efi-ia32-1:2.12-28.fc41.x86_64,grub2-efi-x64-1:2.12-28.fc41.x86_64,shim-ia32-15.8-3.x86_64,shim-x64-15.8-3.x86_64".into(),
             versions: None,
+            #[cfg(efi_arch)]
+            default_bootloader: None,
         };
         assert_eq!(a.can_upgrade_to(&b), Ordering::Less); // means upgradable
         assert_eq!(b.can_upgrade_to(&a), Ordering::Greater);
@@ -160,6 +214,8 @@ mod test {
                     rpm_evr: "15.8-3".into(),
                 },
             ]),
+            #[cfg(efi_arch)]
+            default_bootloader: None,
         };
         let b = ContentMetadata {
             timestamp: t + Duration::try_seconds(1).unwrap(),
@@ -174,6 +230,8 @@ mod test {
                     rpm_evr: "15.8-3".into(),
                 },
             ]),
+            #[cfg(efi_arch)]
+            default_bootloader: None,
         };
         assert_eq!(a.can_upgrade_to(&b), Ordering::Less); // means upgradable
         assert_eq!(b.can_upgrade_to(&a), Ordering::Greater);

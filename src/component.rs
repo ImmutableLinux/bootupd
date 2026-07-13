@@ -14,7 +14,9 @@ use std::path::{Path, PathBuf};
 
 use bootc_internal_blockdev::Device;
 
-use crate::{bootupd::RootContext, model::*};
+#[cfg(efi_arch)]
+use crate::cli::bootupd::DefaultBootloaderOpts;
+use crate::{bootloader::Bootloader, bootupd::RootContext, model::*};
 
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(rename_all = "kebab-case")]
@@ -22,6 +24,27 @@ pub(crate) enum ValidationResult {
     Valid,
     Skip,
     Errors(Vec<String>),
+}
+
+#[derive(PartialEq, Eq, Clone, Copy)]
+pub(crate) enum ComponentType {
+    Bios,
+    Efi,
+}
+
+impl From<ComponentType> for &'static str {
+    fn from(val: ComponentType) -> Self {
+        match val {
+            ComponentType::Bios => "BIOS",
+            ComponentType::Efi => "EFI",
+        }
+    }
+}
+
+impl std::fmt::Display for ComponentType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str((*self).into())
+    }
 }
 
 /// A bootloader subsystem (EFI or BIOS) that can be installed, updated, and validated.
@@ -33,6 +56,10 @@ pub(crate) trait Component {
     /// Returns the name of the component; this will be used for serialization
     /// and should remain stable.
     fn name(&self) -> &'static str;
+
+    /// Returns the type of the component as an enum
+    /// Prefer this over [`Component::name`]
+    fn component_type(&self) -> ComponentType;
 
     /// In an operating system whose initially booted disk image is not
     /// using bootupd, detect whether it looks like the component exists
@@ -63,6 +90,7 @@ pub(crate) trait Component {
         dest_root: &str,
         device: Option<&Device>,
         update_firmware: bool,
+        bootloader: Bootloader,
     ) -> Result<InstalledContent>;
 
     /// Implementation of `bootupd generate-update-metadata` for a given component.
@@ -73,7 +101,11 @@ pub(crate) trait Component {
     fn generate_update_metadata(&self, sysroot: &str) -> Result<Option<ContentMetadata>>;
 
     /// Used on the client to query for an update cached in the current booted OS.
-    fn query_update(&self, sysroot: &Dir) -> Result<Option<ContentMetadata>>;
+    fn query_update(
+        &self,
+        sysroot: &Dir,
+        bootloader: Bootloader,
+    ) -> Result<Option<ContentMetadata>>;
 
     /// This is called in the update code if query_update() returned no metadata.
     /// It should return an error if the current booted system should expect some
@@ -92,6 +124,84 @@ pub(crate) trait Component {
 
     /// Locating efi vendor dir
     fn get_efi_vendor(&self, sysroot: &Path) -> Result<Option<String>>;
+
+    fn is_bootloader_supported(&self, bootloader: Bootloader) -> bool;
+
+    /// Given a component, return metadata on the available update (if any)
+    //
+    /// If bootloader is Some, all metadata not pertaining to the specified bootloader
+    /// is filtered
+    ///
+    /// If bootloader is None, no filtering is performed
+    #[context("Loading update for component {}", self.name())]
+    fn get_component_update(
+        &self,
+        sysroot: &Dir,
+        bootloader: Option<Bootloader>,
+    ) -> Result<Option<ContentMetadata>> {
+        let name = self.component_update_data_name();
+        let path = Path::new(BOOTUPD_UPDATES_DIR).join(&name);
+
+        let Some(f) = sysroot.open_optional(&path)? else {
+            return Ok(None);
+        };
+
+        let mut f = std::io::BufReader::new(f);
+        let mut u = serde_json::from_reader(&mut f)
+            .with_context(|| format!("failed to parse {:?}", &path))?;
+
+        let Some(bootloader) = bootloader else {
+            return Ok(Some(u));
+        };
+
+        // We store metadata of all bootloaders present in the image
+        // So here, we will now filter out the bootloaders
+        u.filter_bootloader(bootloader);
+
+        Ok(Some(u))
+    }
+
+    /// Returns the name of the JSON file containing a component's available update metadata installed
+    /// into the booted operating system root.
+    fn component_update_data_name(&self) -> PathBuf {
+        Path::new(&format!("{}.json", self.name())).into()
+    }
+
+    #[cfg(efi_arch)]
+    fn set_default_bootloader(&self, opts: &DefaultBootloaderOpts) -> Result<()> {
+        if !self.is_bootloader_supported(opts.bootloader) {
+            anyhow::bail!("{} not supported for {}", opts.bootloader, self.name());
+        }
+
+        let root_path = opts.sysroot.as_deref().unwrap_or("/");
+
+        let root = Dir::open_ambient_dir(root_path, ambient_authority())
+            .with_context(|| format!("Opening {root_path}"))?;
+
+        // This command expects bootupd.json to be present
+        let mut update_meta = self
+            .get_component_update(&root, None)?
+            .ok_or_else(|| anyhow::anyhow!("Expected to get update metadata"))?;
+
+        if !update_meta.is_bootloader_available(opts.bootloader) {
+            anyhow::bail!("{} is not present in metadata", opts.bootloader);
+        }
+
+        update_meta.default_bootloader = Some(opts.bootloader);
+
+        write_update_metadata(root_path, self.component_update_data_name(), &update_meta)?;
+
+        Ok(())
+    }
+
+    #[cfg(efi_arch)]
+    fn get_default_bootloader(&self, root: &Dir) -> Result<Option<Bootloader>> {
+        let update_meta = self
+            .get_component_update(&root, None)?
+            .ok_or_else(|| anyhow::anyhow!("Expected to get update metadata"))?;
+
+        Ok(update_meta.default_bootloader)
+    }
 }
 
 /// Given a component name, create an implementation.
@@ -134,47 +244,22 @@ pub(crate) fn component_updatedir(sysroot: &str, component: &dyn Component) -> P
     Path::new(sysroot).join(component_updatedirname(component))
 }
 
-/// Returns the name of the JSON file containing a component's available update metadata installed
-/// into the booted operating system root.
-fn component_update_data_name(component: &dyn Component) -> PathBuf {
-    Path::new(&format!("{}.json", component.name())).into()
-}
-
 /// Helper method for writing an update file
 pub(crate) fn write_update_metadata(
     sysroot: &str,
-    component: &dyn Component,
+    file_path: PathBuf,
     meta: &ContentMetadata,
 ) -> Result<()> {
     let sysroot = Dir::open_ambient_dir(sysroot, ambient_authority())?;
     let dir = sysroot.open_dir(BOOTUPD_UPDATES_DIR)?;
-    let name = component_update_data_name(component);
 
     dir.atomic_write_with_perms(
-        name,
+        file_path,
         serde_json::to_vec(&meta).context("Serializing metadata")?,
         Permissions::from_mode(0o644),
     )?;
 
     Ok(())
-}
-
-/// Given a component, return metadata on the available update (if any)
-#[context("Loading update for component {}", component.name())]
-pub(crate) fn get_component_update(
-    sysroot: &Dir,
-    component: &dyn Component,
-) -> Result<Option<ContentMetadata>> {
-    let name = component_update_data_name(component);
-    let path = Path::new(BOOTUPD_UPDATES_DIR).join(name);
-    if let Some(f) = sysroot.open_optional(&path)? {
-        let mut f = std::io::BufReader::new(f);
-        let u = serde_json::from_reader(&mut f)
-            .with_context(|| format!("failed to parse {:?}", &path))?;
-        Ok(Some(u))
-    } else {
-        Ok(None)
-    }
 }
 
 #[context("Querying adoptable state")]
@@ -185,6 +270,8 @@ pub(crate) fn query_adopt_state() -> Result<Option<Adoptable>> {
             timestamp: coreos_aleph.ts,
             version: coreos_aleph.aleph.version,
             versions: None,
+            #[cfg(efi_arch)]
+            default_bootloader: None,
         };
         log::trace!("Adoptable: {:?}", &meta);
         return Ok(Some(Adoptable {
@@ -202,6 +289,8 @@ pub(crate) fn query_adopt_state() -> Result<Option<Adoptable>> {
             timestamp,
             version: "unknown".to_string(),
             versions: None,
+            #[cfg(efi_arch)]
+            default_bootloader: None,
         };
         return Ok(Some(Adoptable {
             version: meta,
@@ -249,10 +338,10 @@ mod tests {
         let all_components = crate::bootupd::get_components();
         let target_components: Vec<_> = all_components.values().collect();
         for &component in target_components.iter() {
-            if component.name() == "BIOS" {
+            if component.component_type() == ComponentType::Bios {
                 assert_eq!(component.get_efi_vendor(tdp)?, None);
             }
-            if component.name() == "EFI" {
+            if component.component_type() == ComponentType::Efi {
                 let x = component.get_efi_vendor(tdp);
                 assert_eq!(x.is_err(), true);
                 efi.remove_dir_all("centos")?;
@@ -289,6 +378,82 @@ mod tests {
                 }
             }
         }
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(efi_arch)]
+    fn test_set_default_bootloader() -> Result<()> {
+        use chrono::Utc;
+
+        let td = tempfile::tempdir()?;
+        let sysroot = td.path().to_str().unwrap().to_string();
+        let tdir = Dir::open_ambient_dir(&sysroot, ambient_authority())?;
+
+        // Create the updates directory
+        let mut dir_builder = DirBuilder::new();
+        dir_builder.mode(0o755);
+        dir_builder.recursive(true);
+        tdir.create_dir_with(BOOTUPD_UPDATES_DIR, &dir_builder)?;
+
+        // Create test metadata without the target bootloader
+        let meta = ContentMetadata {
+            timestamp: Utc::now(),
+            version: "grub2-efi-x64-1:2.12-21.fc41.x86_64".into(), // Only has grub2-efi, not grub-cc
+            versions: None,
+            default_bootloader: None,
+        };
+
+        let all_components = crate::bootupd::get_components();
+        let efi_component = all_components.get("EFI").unwrap();
+
+        // Write metadata file
+        write_update_metadata(&sysroot, efi_component.component_update_data_name(), &meta)?;
+
+        let opts = DefaultBootloaderOpts {
+            sysroot: Some(sysroot.clone()),
+            bootloader: Bootloader::GrubCC, // This bootloader is not in the metadata version string
+        };
+
+        if efi_component.is_bootloader_supported(opts.bootloader) {
+            let result = efi_component.set_default_bootloader(&opts);
+            assert!(result.is_err());
+            assert!(result
+                .unwrap_err()
+                .to_string()
+                .contains("is not present in metadata"));
+        }
+
+        // Now create test metadata with both bootloaders available
+        let meta = ContentMetadata {
+            timestamp: Utc::now(),
+            version: "grub2-efi-x64-1:2.12-21.fc41.x86_64,grub-cc-efi-x64-1:2.12-21.fc41.x86_64"
+                .into(),
+            versions: None,
+            default_bootloader: None,
+        };
+
+        // Write initial metadata file
+        write_update_metadata(&sysroot, efi_component.component_update_data_name(), &meta)?;
+
+        let opts = DefaultBootloaderOpts {
+            sysroot: Some(sysroot.clone()),
+            bootloader: Bootloader::GrubCC,
+        };
+
+        if efi_component.is_bootloader_supported(opts.bootloader) {
+            // Should succeed
+            let result = efi_component.set_default_bootloader(&opts);
+            assert!(result.is_ok());
+
+            // Verify the metadata was updated
+            let root = Dir::open_ambient_dir(&sysroot, ambient_authority())?;
+            let updated_meta = efi_component.get_component_update(&root, None)?;
+            assert!(updated_meta.is_some());
+            let updated_meta = updated_meta.unwrap();
+            assert_eq!(updated_meta.default_bootloader, Some(Bootloader::GrubCC));
+        }
+
         Ok(())
     }
 }

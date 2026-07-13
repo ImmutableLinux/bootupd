@@ -191,12 +191,20 @@ impl FileTree {
         target_arch = "aarch64",
         target_arch = "riscv64"
     ))]
-    pub(crate) fn new_from_dir(dir: &Dir) -> Result<Self> {
+    pub(crate) fn new_from_dir(dir: &Dir, dirs_to_skip: Option<Vec<&str>>) -> Result<Self> {
         let mut children = BTreeMap::new();
+        let dirs_to_skip = dirs_to_skip.unwrap_or([].into());
+
         for (k, mut v) in Self::unsorted_from_dir(dir)?.drain() {
-            let k_path = get_dest_efi_path(Utf8Path::new(&k)).to_string();
+            let src = Utf8Path::new(&k);
+            let k_path = get_dest_efi_path(src);
+
+            if src.components().any(|c| dirs_to_skip.contains(&c.as_str())) {
+                continue;
+            }
+
             v.source = Some(k);
-            children.insert(k_path, v);
+            children.insert(k_path.to_string(), v);
         }
 
         Ok(Self { children })
@@ -532,8 +540,8 @@ mod tests {
     use std::path::Path;
 
     fn run_diff(a: &Dir, b: &Dir) -> Result<FileTreeDiff> {
-        let ta = FileTree::new_from_dir(a)?;
-        let tb = FileTree::new_from_dir(b)?;
+        let ta = FileTree::new_from_dir(a, None)?;
+        let tb = FileTree::new_from_dir(b, None)?;
         let diff = ta.diff(&tb)?;
         Ok(diff)
     }
@@ -557,15 +565,15 @@ mod tests {
         let c = Dir::open_ambient_dir(&c, ambient_authority())?;
         let da = Dir::open_ambient_dir(a, ambient_authority())?;
         let db = Dir::open_ambient_dir(b, ambient_authority())?;
-        let ta = FileTree::new_from_dir(&da)?;
-        let tb = FileTree::new_from_dir(&db)?;
+        let ta = FileTree::new_from_dir(&da, None)?;
+        let tb = FileTree::new_from_dir(&db, None)?;
         let diff = ta.diff(&tb)?;
         let rdiff = tb.diff(&ta)?;
         assert_eq!(diff.count(), rdiff.count());
         assert_eq!(diff.additions.len(), rdiff.removals.len());
         assert_eq!(diff.changes.len(), rdiff.changes.len());
         apply_diff(&db, &c, &diff, opts)?;
-        let tc = FileTree::new_from_dir(&c)?;
+        let tc = FileTree::new_from_dir(&c, None)?;
         let newdiff = tb.diff(&tc)?;
         let skip_removals = opts.map(|o| o.skip_removals).unwrap_or(false);
         if skip_removals {
@@ -622,8 +630,8 @@ mod tests {
         let diff = run_diff(&a, &b)?;
         assert_eq!(diff.count(), 1);
         assert_eq!(diff.removals.len(), 1);
-        let ta = FileTree::new_from_dir(&a)?;
-        let tb = FileTree::new_from_dir(&b)?;
+        let ta = FileTree::new_from_dir(&a, None)?;
+        let tb = FileTree::new_from_dir(&b, None)?;
         let cdiff = ta.changes(&tb)?;
         assert_eq!(cdiff.count(), 1);
         assert_eq!(cdiff.removals.len(), 1);
@@ -654,7 +662,7 @@ mod tests {
         let diff = run_diff(&a, &b)?;
         assert_eq!(diff.count(), 1);
         assert_eq!(diff.changes.len(), 1);
-        let ta = FileTree::new_from_dir(&a)?;
+        let ta = FileTree::new_from_dir(&a, None)?;
         let rdiff = ta.relative_diff_to(&b)?;
         assert_eq!(rdiff.count(), diff.count());
         assert_eq!(rdiff.changes.len(), diff.changes.len());
@@ -685,8 +693,8 @@ mod tests {
         {
             let a = Dir::open_ambient_dir(&a, ambient_authority())?;
             let b = Dir::open_ambient_dir(&b, ambient_authority())?;
-            let ta = FileTree::new_from_dir(&a)?;
-            let tb = FileTree::new_from_dir(&b)?;
+            let ta = FileTree::new_from_dir(&a, None)?;
+            let tb = FileTree::new_from_dir(&b, None)?;
             let diff = ta.diff(&tb)?;
             assert_eq!(diff.changes.len(), 1);
             assert_eq!(diff.additions.len(), 1);
@@ -716,8 +724,8 @@ mod tests {
             fs::write(c.join(bar).join("newfile"), "filedata")?;
             let a = Dir::open_ambient_dir(&a.join("EFI"), ambient_authority())?;
             let c = Dir::open_ambient_dir(&c, ambient_authority())?;
-            let ta = FileTree::new_from_dir(&a)?;
-            let tc = FileTree::new_from_dir(&c)?;
+            let ta = FileTree::new_from_dir(&a, None)?;
+            let tc = FileTree::new_from_dir(&c, None)?;
             let diff = ta.diff(&tc)?;
             assert_eq!(diff.changes.len(), 1);
             assert_eq!(diff.additions.len(), 1);
@@ -895,7 +903,7 @@ mod tests {
         }
         {
             b.remove_file(testfile)?;
-            let ta = FileTree::new_from_dir(&a)?;
+            let ta = FileTree::new_from_dir(&a, None)?;
             let diff = ta.relative_diff_to(&b)?;
             assert_eq!(diff.count(), 1);
             assert_eq!(diff.removals.len(), 1);

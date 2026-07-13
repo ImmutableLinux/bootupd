@@ -170,6 +170,7 @@ version = "0.2.35"
 dependencies = [
  "anyhow",
  "bootc-internal-blockdev",
+ "bootc-internal-mount",
  "bootc-internal-utils",
  "camino",
  "cap-std",
