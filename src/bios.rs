@@ -9,6 +9,7 @@ use std::process::Command;
 
 use bootc_internal_blockdev::Device;
 
+use crate::bootloader::Bootloader;
 use crate::bootupd::RootContext;
 use crate::component::*;
 use crate::freezethaw::fsfreeze_thaw_cycle;
@@ -99,7 +100,15 @@ impl Bios {
 
 impl Component for Bios {
     fn name(&self) -> &'static str {
-        "BIOS"
+        self.component_type().into()
+    }
+
+    fn component_type(&self) -> ComponentType {
+        ComponentType::Bios
+    }
+
+    fn is_bootloader_supported(&self, bootloader: Bootloader) -> bool {
+        matches!(bootloader, Bootloader::Grub)
     }
 
     fn install(
@@ -108,12 +117,17 @@ impl Component for Bios {
         dest_root: &str,
         device: Option<&Device>,
         _update_firmware: bool,
+        bootloader: Bootloader,
     ) -> Result<InstalledContent> {
+        if !self.is_bootloader_supported(bootloader) {
+            anyhow::bail!("{bootloader} cannot be installed for {}", self.name());
+        }
+
         let device =
             device.ok_or_else(|| anyhow::anyhow!("BIOS component requires a target device"))?;
         let src_dir = Dir::open_ambient_dir(src_root, ambient_authority())
             .with_context(|| format!("opening source directory {src_root}"))?;
-        let Some(meta) = get_component_update(&src_dir, self)? else {
+        let Some(meta) = self.get_component_update(&src_dir, Some(bootloader))? else {
             anyhow::bail!("No update metadata for component {} found", self.name());
         };
 
@@ -136,7 +150,7 @@ impl Component for Bios {
 
         // Query the rpm database and list the package and build times for /usr/sbin/grub2-install
         let meta = packagesystem::query_files(sysroot_path, [&grub_install])?;
-        write_update_metadata(sysroot_path, self, &meta)?;
+        write_update_metadata(sysroot_path, self.component_update_data_name(), &meta)?;
         Ok(Some(meta))
     }
 
@@ -245,8 +259,16 @@ impl Component for Bios {
         }))
     }
 
-    fn query_update(&self, sysroot: &Dir) -> Result<Option<ContentMetadata>> {
-        get_component_update(sysroot, self)
+    fn query_update(
+        &self,
+        sysroot: &Dir,
+        bootloader: Bootloader,
+    ) -> Result<Option<ContentMetadata>> {
+        if !self.is_bootloader_supported(bootloader) {
+            return Ok(None);
+        }
+
+        self.get_component_update(sysroot, Some(bootloader))
     }
 
     fn query_requires_update(&self, sysroot: &Dir) -> Result<()> {
@@ -259,7 +281,7 @@ impl Component for Bios {
 
     fn run_update(&self, rootcxt: &RootContext, _: &InstalledContent) -> Result<InstalledContent> {
         let updatemeta = self
-            .query_update(&rootcxt.sysroot)?
+            .query_update(&rootcxt.sysroot, Bootloader::Grub)?
             .expect("update available");
 
         for parent in rootcxt.device.find_all_roots()? {

@@ -50,6 +50,8 @@ impl ContentMetadata01 {
             timestamp,
             version: self.version,
             versions: None,
+            #[cfg(efi_arch)]
+            default_bootloader: None,
         }
     }
 }

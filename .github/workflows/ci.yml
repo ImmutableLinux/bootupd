@@ -18,16 +18,33 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  c9s-bootc-e2e:
+  bootc-e2e:
     strategy:
       matrix:
         runner:
           - ubuntu-24.04
           - ubuntu-24.04-arm
+        grubcc:
+          - 0
+          - 1
 
     runs-on: [ "${{ matrix.runner }}" ]
 
     steps:
+      - name: Setup env
+        run: |
+          IMG_NAME=localhost/bootupd-grubcc-${{ matrix.grubcc }}
+          echo "IMG_NAME=${IMG_NAME}" >> $GITHUB_ENV
+
+          if [[ "${{ matrix.grubcc }}" == "1" ]]; then
+            # we only have grub-cc in feodra (for now)
+            OS_ID="fedora"
+          else
+            OS_ID="centos"
+          fi
+
+          echo "OS_ID=${OS_ID}" >> $GITHUB_ENV
+      
       - name: Get a newer podman for heredoc support (from debian testing)
         run: |
           set -eux
@@ -51,14 +68,26 @@ jobs:
           sudo apt update -y
           sudo apt install -y podman
 
-      - name: build
-        run: sudo podman build -t localhost/bootupd:latest -f Dockerfile .
+      - name: build with grubcc=${{ matrix.grubcc }}
+        run: |
+          dockerfile=Dockerfile
+          build_args=()
+
+          if [[ "${{ matrix.grubcc }}" == "1" ]]; then
+            dockerfile=Dockerfile.bls
+            build_args=(--build-arg "grubcc=${{ matrix.grubcc }}")
+          fi
+
+          sudo podman build "${build_args[@]}" . -t "$IMG_NAME"  -f "$dockerfile"
 
       - name: bootupctl status in container
         run: |
           set -xeuo pipefail
-          sudo podman run --rm -v $PWD:/run/src -w /run/src --privileged localhost/bootupd:latest tests/tests/bootupctl-status-in-bootc.sh
+          sudo podman run --rm -v $PWD:/run/src -w /run/src --privileged "$IMG_NAME" tests/tests/bootupctl-status-in-bootc.sh
 
+      # Make sure grub stuff works with and without grubcc in the container image
+      # TODO: Test GrubCC installation with composefs after a bootc release includes
+      # https://github.com/bootc-dev/bootc/pull/2223
       - name: bootc install to disk
         run: |
           set -xeuo pipefail
@@ -66,7 +95,7 @@ jobs:
           sudo podman run --rm --privileged -v .:/target --pid=host --security-opt label=disable \
             -v /var/lib/containers:/var/lib/containers \
             -v /dev:/dev \
-            localhost/bootupd:latest bootc install to-disk --skip-fetch-check \
+            "$IMG_NAME" bootc install to-disk --filesystem ext4 --skip-fetch-check \
             --disable-selinux --generic-image --via-loopback /target/myimage.raw
           # Verify we installed grub.cfg and shim on the disk
           sudo losetup -P -f myimage.raw
@@ -80,7 +109,7 @@ jobs:
             # Assume aarch64 for now
             shim="shimaa64.efi"
           fi
-          sudo ls /mnt/EFI/centos/{grub.cfg,${shim}}
+          sudo ls /mnt/EFI/$OS_ID/{grub.cfg,${shim}}
           sudo umount /mnt
           # check /boot/grub2/grub.cfg permission
           root_part=$(sudo sfdisk -l -J "${device}" | jq -r '.partitiontable.partitions[] | select(.name == "root").node')
@@ -99,7 +128,7 @@ jobs:
           set -xeuo pipefail
           sudo podman run --rm -ti --privileged -v /:/target --pid=host --security-opt label=disable \
             -v /dev:/dev -v /var/lib/containers:/var/lib/containers \
-            localhost/bootupd:latest env BOOTC_BOOTLOADER_DEBUG=1 \
+            "$IMG_NAME" env BOOTC_BOOTLOADER_DEBUG=1 \
             bootc install to-filesystem --skip-fetch-check \
             --acknowledge-destructive \
             --disable-selinux --replace=alongside /target
@@ -113,4 +142,14 @@ jobs:
       - name: bootupctl generate-update-metadata
         run: |
           set -xeuo pipefail
-          sudo podman run --rm -v $PWD:/run/src -w /run/src --privileged localhost/bootupd:latest tests/tests/generate-update-metadata.sh
+          sudo podman run --rm -v $PWD:/run/src -w /run/src --privileged "$IMG_NAME" tests/tests/generate-update-metadata.sh
+
+      - name: Test GrubCC and SystemdBoot
+        run: |
+          if [[ "${{ matrix.grubcc }}" == "0" ]]; then
+            exit 0
+          fi
+
+          set -xeuo pipefail
+          sudo ./scripts/test-bootloader.sh "$IMG_NAME" "grub-cc"
+          sudo ./scripts/test-bootloader.sh "$IMG_NAME" "systemd"

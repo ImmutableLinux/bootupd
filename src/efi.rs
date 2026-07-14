@@ -24,6 +24,7 @@ use widestring::U16CString;
 
 use bootc_internal_blockdev::Device;
 
+use crate::bootloader::{get_bootloader, Bootloader};
 use crate::bootupd::RootContext;
 use crate::freezethaw::fsfreeze_thaw_cycle;
 use crate::model::*;
@@ -86,9 +87,12 @@ pub(crate) fn is_efi_booted() -> Result<bool> {
         .map_err(Into::into)
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub(crate) struct Efi {
     mountpoint: RefCell<Option<PathBuf>>,
+    /// Whether the above mountpoint was already mounted or not
+    /// Won't unmount if it was already mounted
+    was_mounted: RefCell<bool>,
 }
 
 impl Efi {
@@ -115,6 +119,7 @@ impl Efi {
                     continue;
                 }
                 util::ensure_writable_mount(&path)?;
+                *self.was_mounted.borrow_mut() = true;
                 found_mount = Some(path);
                 break;
             }
@@ -147,6 +152,7 @@ impl Efi {
                 if is_mount_point(&mnt)? {
                     log::debug!("ESP already mounted at {mnt:?}, reusing");
                     mountpoint = Some(mnt);
+                    *self.was_mounted.borrow_mut() = true;
                     break;
                 }
             }
@@ -178,7 +184,8 @@ impl Efi {
         Ok(destdir)
     }
 
-    fn unmount(&self) -> Result<()> {
+    pub(crate) fn unmount(&self) -> Result<()> {
+        *self.was_mounted.borrow_mut() = false;
         if let Some(mount) = self.mountpoint.borrow_mut().take() {
             Command::new("umount")
                 .arg(&mount)
@@ -286,7 +293,7 @@ fn read_efi_var_utf16_string(name: &str) -> Option<String> {
 }
 
 /// Read the LoaderInfo EFI variable if it exists.
-fn get_loader_info() -> Option<String> {
+pub(crate) fn get_loader_info() -> Option<String> {
     read_efi_var_utf16_string(LOADER_INFO_VAR_STR)
 }
 
@@ -312,7 +319,22 @@ fn skip_systemd_bootloaders() -> bool {
 
 impl Component for Efi {
     fn name(&self) -> &'static str {
-        "EFI"
+        self.component_type().into()
+    }
+
+    fn component_type(&self) -> ComponentType {
+        ComponentType::Efi
+    }
+
+    fn is_bootloader_supported(&self, bootloader: Bootloader) -> bool {
+        #[cfg(not(efi_arch))]
+        return matches!(bootloader, Bootloader::Grub);
+
+        #[cfg(efi_arch)]
+        matches!(
+            bootloader,
+            Bootloader::Grub | Bootloader::GrubCC | Bootloader::Systemd
+        )
     }
 
     fn query_adopt(&self, devices: &Option<Vec<Device>>) -> Result<Option<Adoptable>> {
@@ -375,7 +397,8 @@ impl Component for Efi {
 
         let updated_path = {
             let efilib_path = rootcxt.path.join(EFILIB);
-            if efilib_path.exists() && get_efi_component_from_usr(&rootcxt.path, EFILIB)?.is_some()
+            if efilib_path.exists()
+                && get_efi_component_from_usr(&rootcxt.path, EFILIB, None)?.is_some()
             {
                 PathBuf::from(EFILIB)
             } else {
@@ -386,7 +409,9 @@ impl Component for Efi {
             .sysroot
             .open_dir(&updated_path)
             .with_context(|| format!("opening update dir {}", updated_path.display()))?;
-        let updatef = filetree::FileTree::new_from_dir(&updated).context("reading update dir")?;
+        // TODO(Johan-Liebert1): Handle adpot
+        let updatef =
+            filetree::FileTree::new_from_dir(&updated, None).context("reading update dir")?;
 
         let esp_devices = esp_devices.unwrap_or_default();
         for esp in esp_devices {
@@ -434,10 +459,11 @@ impl Component for Efi {
         dest_root: &str,
         device: Option<&Device>,
         update_firmware: bool,
+        bootloader: Bootloader,
     ) -> Result<InstalledContent> {
         let src_dir = Dir::open_ambient_dir(src_root, ambient_authority())
             .with_context(|| format!("opening source directory {src_root}"))?;
-        let Some(meta) = get_component_update(&src_dir, self)? else {
+        let Some(meta) = self.get_component_update(&src_dir, Some(bootloader))? else {
             anyhow::bail!("No update metadata for component {} found", self.name());
         };
         log::debug!("Found metadata {}", meta.version);
@@ -468,7 +494,7 @@ impl Component for Efi {
 
         let src_path = Utf8Path::new(src_root);
         let efi_comps = if src_path.join(EFILIB).exists() {
-            get_efi_component_from_usr(&src_path, EFILIB)?
+            get_efi_component_from_usr(src_path, EFILIB, Some(bootloader))?
         } else {
             None
         };
@@ -493,8 +519,21 @@ impl Component for Efi {
             &src.to_owned()
         };
 
+        // Now that we have multiple bootloaders (all named grubx64.efi/grubaa64.efi
+        // due to that name being baked into the shim), we can't blindly use the key
+        // "fedora/grubx64.efi" to refer to the installed bootloader, hence we ask for
+        // any extra bootloaders to be not included in the FileTree
+        let dirs_to_skip = Bootloader::iter()
+            .filter(|b| *b != bootloader)
+            .map(|b| b.efi_component_name())
+            .collect::<Vec<_>>();
+
         // Get filetree from efi path
-        let ft = crate::filetree::FileTree::new_from_dir(&src_dir.open_dir(efi_path)?)?;
+        let ft = crate::filetree::FileTree::new_from_dir(
+            &src_dir.open_dir(efi_path)?,
+            Some(dirs_to_skip),
+        )?;
+
         if update_firmware {
             if let Some(dev) = device {
                 if let Some(vendordir) =
@@ -516,15 +555,20 @@ impl Component for Efi {
         rootcxt: &RootContext,
         current: &InstalledContent,
     ) -> Result<InstalledContent> {
+        let bootloader = get_bootloader()?;
+
         let currentf = current
             .filetree
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("No filetree for installed EFI found!"))?;
         let sysroot_dir = &rootcxt.sysroot;
-        let updatemeta = self.query_update(sysroot_dir)?.expect("update available");
+        let updatemeta = self
+            .query_update(sysroot_dir, bootloader)?
+            .expect("update available");
         let updated_path = {
             let efilib_path = rootcxt.path.join(EFILIB);
-            if efilib_path.exists() && get_efi_component_from_usr(&rootcxt.path, EFILIB)?.is_some()
+            if efilib_path.exists()
+                && get_efi_component_from_usr(&rootcxt.path, EFILIB, None)?.is_some()
             {
                 PathBuf::from(EFILIB)
             } else {
@@ -536,7 +580,14 @@ impl Component for Efi {
             .sysroot
             .open_dir(&updated_path)
             .with_context(|| format!("opening update dir {}", updated_path.display()))?;
-        let updatef = filetree::FileTree::new_from_dir(&updated).context("reading update dir")?;
+
+        let dirs_to_skip = Bootloader::iter()
+            .filter(|b| *b != bootloader)
+            .map(|b| b.efi_component_name())
+            .collect::<Vec<_>>();
+
+        let updatef = filetree::FileTree::new_from_dir(&updated, Some(dirs_to_skip))
+            .context("reading update dir")?;
         let diff = currentf.diff(&updatef)?;
 
         let Some(esp_devices) = rootcxt.device.find_colocated_esps()? else {
@@ -608,13 +659,21 @@ impl Component for Efi {
             ostreeboot.remove_all_optional("efi/EFI")?;
         };
 
-        write_update_metadata(sysroot_path.as_str(), self, &metadata)?;
+        write_update_metadata(
+            sysroot_path.as_str(),
+            self.component_update_data_name(),
+            &metadata,
+        )?;
 
         Ok(Some(metadata))
     }
 
-    fn query_update(&self, sysroot: &Dir) -> Result<Option<ContentMetadata>> {
-        get_component_update(sysroot, self)
+    fn query_update(
+        &self,
+        sysroot: &Dir,
+        bootloader: Bootloader,
+    ) -> Result<Option<ContentMetadata>> {
+        self.get_component_update(sysroot, Some(bootloader))
     }
 
     fn query_requires_update(&self, _sysroot: &Dir) -> Result<()> {
@@ -692,7 +751,12 @@ impl Component for Efi {
 
 impl Drop for Efi {
     fn drop(&mut self) {
-        log::debug!("Unmounting");
+        if *self.was_mounted.borrow() {
+            log::debug!("mountpoint was already mounted. Won't unmount",);
+            return;
+        }
+
+        log::debug!("Unmounting {:?}", self.mountpoint);
         let _ = self.unmount();
     }
 }
@@ -805,7 +869,10 @@ fn find_file_recursive<P: AsRef<Path>>(dir: P, target_file: &str) -> Result<Vec<
 
 #[context("Generating metadata from usr/lib/efi")]
 fn generate_meta_from_usr_efi(sysroot_path: &Utf8Path) -> Result<ContentMetadata> {
-    let Some(efi_components) = get_efi_component_from_usr(sysroot_path, EFILIB)? else {
+    // We DO NOT want to filter while generating metadata
+    // We want to have metadata for multiple bootloaders
+    // Later on, while installing, we'll filter out the stuff we don't need
+    let Some(efi_components) = get_efi_component_from_usr(sysroot_path, EFILIB, None)? else {
         anyhow::bail!("Failed to find EFI components");
     };
 
@@ -824,6 +891,8 @@ fn generate_meta_from_usr_efi(sysroot_path: &Utf8Path) -> Result<ContentMetadata
         timestamp: get_metadata_timestamp()?,
         version: packages.join(","),
         versions: Some(modules_vec),
+        #[cfg(efi_arch)]
+        default_bootloader: None,
     };
 
     Ok(meta)
@@ -837,9 +906,11 @@ pub struct EFIComponent {
 }
 
 /// Get EFIComponents from e.g. usr/lib/efi, like "usr/lib/efi/<name>/<version>/EFI"
+/// Filter the components by Bootloader, if Bootloader is None, no filtering is performed
 fn get_efi_component_from_usr<'a>(
     sysroot: &'a Utf8Path,
     usr_path: &'a str,
+    bootloader: Option<Bootloader>,
 ) -> Result<Option<Vec<EFIComponent>>> {
     let efilib_path = sysroot.join(usr_path);
     let skip_count = Utf8Path::new(usr_path).components().count();
@@ -876,7 +947,22 @@ fn get_efi_component_from_usr<'a>(
     }
     components.sort_by(|a, b| a.name.cmp(&b.name));
 
-    Ok(Some(components))
+    let Some(bootloader) = bootloader else {
+        return Ok(Some(components));
+    };
+
+    // Remove all EFI Components not associated with the bootloader
+    let to_remove = Bootloader::iter()
+        .filter(|b| *b != bootloader)
+        .map(|b| b.efi_component_name())
+        .collect::<Vec<_>>();
+
+    let efi_comps = components
+        .into_iter()
+        .filter(|comp| !to_remove.contains(&comp.name.as_str()))
+        .collect::<Vec<_>>();
+
+    Ok(Some(efi_comps))
 }
 
 /// Copies usr/lib/ostree-boot/EFI to usr/lib/bootupd/updates
@@ -1040,34 +1126,97 @@ Boot0003* test";
     }
 
     #[test]
+    #[cfg(efi_arch)]
     fn test_get_efi_component_from_usr() -> Result<()> {
         let tmpdir: &tempfile::TempDir = &tempfile::tempdir()?;
         let tpath = tmpdir.path();
         let efi_path = tpath.join("usr/lib/efi");
-        std::fs::create_dir_all(efi_path.join("BAR/1.1/EFI"))?;
-        std::fs::create_dir_all(efi_path.join("FOO/1.1/EFI"))?;
-        std::fs::create_dir_all(efi_path.join("FOOBAR/1.1/test"))?;
+
+        // Create realistic directory structure for both bootloaders
+        // grub-cc structure
+        std::fs::create_dir_all(efi_path.join("grub-cc/1:2.12-59.fc45/EFI/fedora"))?;
+        std::fs::File::create(efi_path.join("grub-cc/1:2.12-59.fc45/EFI/fedora/grubx64-cc.efi"))?;
+
+        // grub2 structure
+        std::fs::create_dir_all(efi_path.join("grub2/1:2.12-58.fc44/EFI/fedora"))?;
+        std::fs::File::create(efi_path.join("grub2/1:2.12-58.fc44/EFI/fedora/grubx64.efi"))?;
+
+        // shim structure
+        std::fs::create_dir_all(efi_path.join("shim/16.1-5/EFI/BOOT"))?;
+        std::fs::create_dir_all(efi_path.join("shim/16.1-5/EFI/fedora"))?;
+        std::fs::File::create(efi_path.join("shim/16.1-5/EFI/BOOT/BOOTX64.EFI"))?;
+        std::fs::File::create(efi_path.join("shim/16.1-5/EFI/BOOT/fbx64.efi"))?;
+        std::fs::File::create(efi_path.join("shim/16.1-5/EFI/fedora/BOOTX64.CSV"))?;
+        std::fs::File::create(efi_path.join("shim/16.1-5/EFI/fedora/mmx64.efi"))?;
+        std::fs::File::create(efi_path.join("shim/16.1-5/EFI/fedora/shim.efi"))?;
+        std::fs::File::create(efi_path.join("shim/16.1-5/EFI/fedora/shimx64.efi"))?;
+
         let utf8_tpath =
             Utf8Path::from_path(tpath).ok_or_else(|| anyhow::anyhow!("Path is not valid UTF-8"))?;
-        let efi_comps = get_efi_component_from_usr(utf8_tpath, EFILIB)?;
+
+        // Test with no filtering - should return all EFI components
+        let efi_comps = get_efi_component_from_usr(utf8_tpath, EFILIB, None)?;
         assert_eq!(
             efi_comps,
             Some(vec![
                 EFIComponent {
-                    name: "BAR".to_string(),
-                    version: "1.1".to_string(),
-                    path: Utf8PathBuf::from("usr/lib/efi/BAR/1.1/EFI"),
+                    name: "grub-cc".to_string(),
+                    version: "1:2.12-59.fc45".to_string(),
+                    path: Utf8PathBuf::from("usr/lib/efi/grub-cc/1:2.12-59.fc45/EFI"),
                 },
                 EFIComponent {
-                    name: "FOO".to_string(),
-                    version: "1.1".to_string(),
-                    path: Utf8PathBuf::from("usr/lib/efi/FOO/1.1/EFI"),
+                    name: "grub2".to_string(),
+                    version: "1:2.12-58.fc44".to_string(),
+                    path: Utf8PathBuf::from("usr/lib/efi/grub2/1:2.12-58.fc44/EFI"),
+                },
+                EFIComponent {
+                    name: "shim".to_string(),
+                    version: "16.1-5".to_string(),
+                    path: Utf8PathBuf::from("usr/lib/efi/shim/16.1-5/EFI"),
                 },
             ])
         );
-        std::fs::remove_dir_all(efi_path.join("BAR/1.1/EFI"))?;
-        std::fs::remove_dir_all(efi_path.join("FOO/1.1/EFI"))?;
-        let efi_comps = get_efi_component_from_usr(utf8_tpath, EFILIB)?;
+
+        // Test with filtering for Grub - should only return grub2 and shim
+        let efi_comps = get_efi_component_from_usr(utf8_tpath, EFILIB, Some(Bootloader::Grub))?;
+        assert_eq!(
+            efi_comps,
+            Some(vec![
+                EFIComponent {
+                    name: "grub2".to_string(),
+                    version: "1:2.12-58.fc44".to_string(),
+                    path: Utf8PathBuf::from("usr/lib/efi/grub2/1:2.12-58.fc44/EFI"),
+                },
+                EFIComponent {
+                    name: "shim".to_string(),
+                    version: "16.1-5".to_string(),
+                    path: Utf8PathBuf::from("usr/lib/efi/shim/16.1-5/EFI"),
+                },
+            ])
+        );
+
+        // Test with filtering for GrubCC - should only return grub-cc and shim
+        let efi_comps = get_efi_component_from_usr(utf8_tpath, EFILIB, Some(Bootloader::GrubCC))?;
+        assert_eq!(
+            efi_comps,
+            Some(vec![
+                EFIComponent {
+                    name: "grub-cc".to_string(),
+                    version: "1:2.12-59.fc45".to_string(),
+                    path: Utf8PathBuf::from("usr/lib/efi/grub-cc/1:2.12-59.fc45/EFI"),
+                },
+                EFIComponent {
+                    name: "shim".to_string(),
+                    version: "16.1-5".to_string(),
+                    path: Utf8PathBuf::from("usr/lib/efi/shim/16.1-5/EFI"),
+                },
+            ])
+        );
+
+        // Test with empty directory - should return None
+        std::fs::remove_dir_all(&efi_path)?;
+        std::fs::create_dir_all(&efi_path)?;
+        let efi_comps = get_efi_component_from_usr(utf8_tpath, EFILIB, None)?;
         assert_eq!(efi_comps, None);
         Ok(())
     }

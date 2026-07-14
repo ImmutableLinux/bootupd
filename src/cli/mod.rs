@@ -4,7 +4,7 @@ use anyhow::Result;
 use clap::Parser;
 use log::LevelFilter;
 mod bootupctl;
-mod bootupd;
+pub(crate) mod bootupd;
 
 /// Top-level multicall CLI.
 #[derive(Debug, Parser)]
