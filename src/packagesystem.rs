@@ -223,13 +223,19 @@ fn parse_evr(pkg: &str) -> Module {
         split_name_version(pkg).unwrap()
     };
 
-    let name = if is_grub_cc_name(&name_str) || name_str.starts_with("systemd-boot") {
+    // Exceptions for grub**-cc and systemd-boot
+    let name = if is_grub_cc_name(&name_str) {
         "grub-cc".to_string()
+    } else if name_str.contains("systemd-boot") {
+        "systemd-boot".to_string()
     } else {
-        name_str
-            .split_once('-')
-            .map(|(name, _)| name.to_string())
-            .unwrap_or(name_str.clone())
+        normalize_package_name(
+            name_str
+                .split_once('-')
+                .map(|(name, _)| name)
+                .unwrap_or(&name_str),
+        )
+        .to_string()
     };
 
     Module { name, rpm_evr }
