@@ -55,7 +55,7 @@ fn is_grub_cc_name(name: &str) -> bool {
     cc_pos < version_boundary
 }
 
-fn normalize_package_name(name: &str) -> &str {
+pub fn normalize_package_name(name: &str) -> &str {
     if is_grub_cc_name(name) {
         return "grub-cc";
     }

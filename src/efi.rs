@@ -881,7 +881,7 @@ fn generate_meta_from_usr_efi(sysroot_path: &Utf8Path) -> Result<ContentMetadata
     for efi in efi_components {
         packages.push(format!("{}-{}", efi.name, efi.version));
         modules_vec.push(Module {
-            name: efi.name,
+            name: normalize_package_name(&efi.name).to_string(),
             rpm_evr: efi.version,
         });
     }
