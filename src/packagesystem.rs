@@ -107,7 +107,6 @@ fn parse_manifest(data: &[u8]) -> Result<ContentMetadata> {
         timestamp: *largest_timestamp,
         version,
         versions: Some(modules),
-        versions: Some(modules_vec),
         #[cfg(efi_arch)]
         default_bootloader: None,
     })

@@ -116,6 +116,7 @@ impl CtlCommand {
             }
             CtlVerb::Backend(CtlBackend::GenerateManifest(opts)) => {
                 super::bootupd::DCommand::run_generate_manifest(opts)
+            }
             #[cfg(efi_arch)]
             CtlVerb::Backend(CtlBackend::SetDefaultBootloader(opts)) => {
                 super::bootupd::DCommand::set_default_bootloader(opts)

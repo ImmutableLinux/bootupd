@@ -115,6 +115,9 @@ pub struct GenerateManifestOpts {
     /// Grub or shim filepaths
     #[clap(value_parser)]
     files: Vec<PathBuf>,
+}
+
+#[derive(Debug, Parser)]
 pub struct DefaultBootloaderOpts {
     /// Physical root mountpoint
     #[clap(long)]
