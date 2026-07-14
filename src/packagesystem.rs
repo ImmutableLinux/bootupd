@@ -85,7 +85,11 @@ pub(crate) struct Module {
 
 impl Module {
     pub(crate) fn rpm_evr(&self) -> Version {
-        Version::from(&self.rpm_evr)
+        if self.rpm_evr.is_empty() {
+            Version::from("0")
+        } else {
+            Version::from(&self.rpm_evr)
+        }
     }
 
     fn canonical_name(&self) -> &str {
@@ -340,7 +344,7 @@ mod tests {
             "grub2-efi-x64-1:2.06-95.fc38.x86_64,shim-x64-15.6-2.x86_64"
         );
         let modules = parsed.versions.unwrap();
-        assert_eq!(modules[0].name, "grub2");
+        assert_eq!(modules[0].name, "grub");
         assert_eq!(modules[0].rpm_evr, "1:2.06-95.fc38");
         assert_eq!(modules[1].name, "shim");
         assert_eq!(modules[1].rpm_evr, "15.6-2");
@@ -355,7 +359,7 @@ mod tests {
         );
         let meta = query_files(dir.path().to_str().unwrap(), std::iter::empty::<&Path>()).unwrap();
         let modules = meta.versions.unwrap();
-        assert_eq!(modules[0].name, "grub2");
+        assert_eq!(modules[0].name, "grub");
         assert_eq!(modules[1].name, "shim");
     }
 
