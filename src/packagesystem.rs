@@ -18,7 +18,48 @@ const MANIFEST_PATH: &str = "usr/lib/bootupd/manifest";
 //If any package starts with grub** shim**, this will make in one name in ANY distros
 const CANONICAL_NAMES: &[&str] = &["grub", "shim"];
 
+fn is_grub_cc_name(name: &str) -> bool {
+    // Handle raw package names and full NEVRA strings.
+    if !(name.starts_with("grub-") || name.starts_with("grub2-")) {
+        return false;
+    }
+
+    let main_name = if let Some((main, arch)) = name.rsplit_once('.') {
+        if arch == std::env::consts::ARCH {
+            main
+        } else {
+            name
+        }
+    } else {
+        name
+    };
+
+    let cc_pos = match main_name.find("-cc") {
+        Some(pos) => pos,
+        None => return false,
+    };
+
+    let version_boundary = main_name
+        .char_indices()
+        .find(|(idx, ch)| {
+            *ch == '-'
+                && main_name[*idx + 1..]
+                    .chars()
+                    .next()
+                    .map(|c| c.is_ascii_digit())
+                    .unwrap_or(false)
+        })
+        .map(|(idx, _)| idx)
+        .unwrap_or(main_name.len());
+
+    cc_pos < version_boundary
+}
+
 fn normalize_package_name(name: &str) -> &str {
+    if is_grub_cc_name(name) {
+        return "grub-cc";
+    }
+
     for canonical in CANONICAL_NAMES {
         if name == *canonical {
             return canonical;
@@ -137,7 +178,14 @@ where
 }
 
 fn split_name_version(input: &str) -> Option<(String, String)> {
-    let main = input.rsplit_once('.')?.0;
+    let main = if input.ends_with(std::env::consts::ARCH) {
+        input
+            .rsplit_once('.')
+            .map(|(main, _)| main)
+            .unwrap_or(input)
+    } else {
+        input
+    };
     let mut parts = main.rsplitn(3, '-');
     let release = parts.next()?;
     let version = parts.next()?;
@@ -147,31 +195,44 @@ fn split_name_version(input: &str) -> Option<(String, String)> {
 
 //In this function if it using rpm use rpm_rs
 fn parse_evr(pkg: &str) -> Module {
-    if !pkg.ends_with(std::env::consts::ARCH) {
-        let (name, evr) = pkg.split_once('-').unwrap_or((pkg, ""));
-        return Module {
-            name: name.to_string(),
-            rpm_evr: evr.to_string(),
+    let (name_str, rpm_evr) = if is_grub_cc_name(pkg) {
+        let pkg_no_arch = if let Some((main, arch)) = pkg.rsplit_once('.') {
+            if arch == std::env::consts::ARCH {
+                main
+            } else {
+                pkg
+            }
+        } else {
+            pkg
         };
-    }
 
-    let (name_str, rpm_evr) = {
-        #[cfg(not(feature = "rpm"))]
-        {
-            split_name_version(pkg).unwrap()
+        if pkg_no_arch.ends_with("-cc") {
+            (pkg_no_arch.to_string(), String::new())
+        } else {
+            split_name_version(pkg).unwrap_or_else(|| {
+                let (name, evr) = pkg.split_once('-').unwrap_or((pkg, ""));
+                (name.to_string(), evr.to_string())
+            })
         }
-        #[cfg(feature = "rpm")]
-        {
-            let nevra = rpm_rs::Nevra::parse(pkg);
-            (nevra.name().to_string(), nevra.evr().to_string())
-        }
+    } else if !pkg.ends_with(std::env::consts::ARCH) {
+        split_name_version(pkg).unwrap_or_else(|| {
+            let (name, evr) = pkg.split_once('-').unwrap_or((pkg, ""));
+            (name.to_string(), evr.to_string())
+        })
+    } else {
+        split_name_version(pkg).unwrap()
     };
 
-    let (name, _) = name_str.split_once('-').unwrap_or((&name_str, ""));
-    Module {
-        name: name.to_string(),
-        rpm_evr,
-    }
+    let name = if is_grub_cc_name(&name_str) || name_str.starts_with("systemd-boot") {
+        "grub-cc".to_string()
+    } else {
+        name_str
+            .split_once('-')
+            .map(|(name, _)| name.to_string())
+            .unwrap_or(name_str.clone())
+    };
+
+    Module { name, rpm_evr }
 }
 
 fn parse_evr_vec(input: &str) -> Vec<Module> {
@@ -242,15 +303,24 @@ mod tests {
         assert_eq!(normalize_package_name("grub-efi-amd64"), "grub");
         assert_eq!(normalize_package_name("grub-efi-arm64"), "grub");
         assert_eq!(normalize_package_name("grub-pc"), "grub");
-        // Shim Variants
-        assert_eq!(normalize_package_name("shim-x64"), "shim");
-        assert_eq!(normalize_package_name("shim-ia32"), "shim");
-        assert_eq!(normalize_package_name("shim-signed"), "shim");
-        assert_eq!(normalize_package_name("shim-unsigned"), "shim");
-        // Should not (this is not grub, or shim)
+        // Grub CC variants should all canonicalize to grub-cc
+        assert_eq!(normalize_package_name("grub-cc"), "grub-cc");
+        assert_eq!(normalize_package_name("grub-cc-1:2.12-28.fc42"), "grub-cc");
+        assert_eq!(normalize_package_name("grub2-efi-x64-cc"), "grub-cc");
+        assert_eq!(
+            normalize_package_name("grub2-efi-x64-cc-1:2.12-28.fc42.x86_64"),
+            "grub-cc"
+        );
+        assert_eq!(normalize_package_name("grub2-efi-ia32-cc"), "grub-cc");
+        assert_eq!(
+            normalize_package_name("grub2-efi-ia32-cc-1:2.12-28.fc42.x86_64"),
+            "grub-cc"
+        );
+        assert_eq!(normalize_package_name("grub-efi-x64-cc"), "grub-cc");
+        assert_eq!(normalize_package_name("grub-efi-x64-cc-1:2.12"), "grub-cc");
+        // Should not be treated as grub-cc
         assert_eq!(normalize_package_name("grubby"), "grubby");
         assert_eq!(normalize_package_name("shimmer"), "shimmer");
-        // Unkown packages, no changes
         assert_eq!(normalize_package_name("unknown-pkg"), "unknown-pkg");
     }
 
@@ -281,6 +351,27 @@ mod tests {
         let modules = meta.versions.unwrap();
         assert_eq!(modules[0].name, "grub2");
         assert_eq!(modules[1].name, "shim");
+    }
+
+    #[test]
+    fn test_parse_evr_grub_cc() {
+        let module = parse_evr("grub-cc-1:2.12-28.fc42.x86_64");
+        assert_eq!(module.name, "grub-cc");
+        assert_eq!(module.rpm_evr, "1:2.12-28.fc42");
+    }
+
+    #[test]
+    fn test_parse_evr_grub2_efi_x64_cc() {
+        let module = parse_evr("grub2-efi-x64-cc-1:2.12-28.fc42.x86_64");
+        assert_eq!(module.name, "grub-cc");
+        assert_eq!(module.rpm_evr, "1:2.12-28.fc42");
+    }
+
+    #[test]
+    fn test_parse_evr_grub2_efi_x64_cc_name_only() {
+        let module = parse_evr("grub2-efi-x64-cc");
+        assert_eq!(module.name, "grub-cc");
+        assert_eq!(module.rpm_evr, "");
     }
 
     #[test]
