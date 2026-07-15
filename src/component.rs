@@ -265,7 +265,7 @@ pub(crate) fn write_update_metadata(
 #[context("Querying adoptable state")]
 pub(crate) fn query_adopt_state() -> Result<Option<Adoptable>> {
     // This would be extended with support for other operating systems later
-    if let Some(coreos_aleph) = crate::coreos::get_aleph_version(Path::new("/"))? {
+    if let Some(coreos_aleph) = crate::aleph::get_aleph_version(Path::new("/"))? {
         let meta = ContentMetadata {
             timestamp: coreos_aleph.ts,
             version: coreos_aleph.aleph.version,

@@ -4,7 +4,7 @@ use crate::bootloader::{get_bootloader, Bootloader};
 use crate::cli::bootupd::InstallOpts;
 use crate::component::{self, ComponentType};
 use crate::component::{Component, ValidationResult};
-use crate::coreos;
+use crate::aleph;
 #[cfg(any(
     target_arch = "x86_64",
     target_arch = "aarch64",
@@ -681,7 +681,7 @@ pub(crate) fn print_status(status: &Status) -> Result<()> {
         }
     }
 
-    if let Some(coreos_aleph) = coreos::get_aleph_version(Path::new("/"))? {
+    if let Some(coreos_aleph) = aleph::get_aleph_version(Path::new("/"))? {
         println!("CoreOS aleph version: {}", coreos_aleph.aleph.version);
     }
 

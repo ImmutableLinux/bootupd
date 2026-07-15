@@ -23,7 +23,7 @@ mod bootloader;
 mod bootupd;
 mod cli;
 mod component;
-mod coreos;
+mod aleph;
 #[cfg(any(
     target_arch = "x86_64",
     target_arch = "aarch64",
