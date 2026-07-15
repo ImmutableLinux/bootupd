@@ -1,4 +1,8 @@
-//! Bits specific to Fedora CoreOS (and derivatives).
+//! Aleph version file support.
+//!
+//! The "aleph" file records the original OS version at install time.
+//! This is written by CoreOS (`.coreos-aleph-version.json`) and
+//! bootc (`.bootc-aleph.json`).
 
 /*
  * Copyright (C) 2020 Red Hat, Inc.
@@ -26,22 +30,30 @@ pub(crate) struct AlephWithTimestamp {
     pub(crate) ts: chrono::DateTime<Utc>,
 }
 
-/// Path to the file, see above
-const ALEPH_PATH: &str = "sysroot/.coreos-aleph-version.json";
+/// Known aleph file paths, checked in order of priority.
+const ALEPH_PATHS: &[&str] = &[
+    "sysroot/.coreos-aleph-version.json",
+    "sysroot/.bootc-aleph.json",
+];
 
 pub(crate) fn get_aleph_version(root: &Path) -> Result<Option<AlephWithTimestamp>> {
-    let path = &root.join(ALEPH_PATH);
-    if !path.exists() {
-        return Ok(None);
+    for aleph_path in ALEPH_PATHS {
+        let path = &root.join(aleph_path);
+        if !path.exists() {
+            continue;
+        }
+        let statusf = File::open(path).with_context(|| format!("Opening {path:?}"))?;
+        let meta = statusf.metadata()?;
+        let bufr = std::io::BufReader::new(statusf);
+        let aleph: Aleph =
+            serde_json::from_reader(bufr).with_context(|| format!("Parsing {path:?}"))?;
+        log::debug!("Found aleph version in {aleph_path}");
+        return Ok(Some(AlephWithTimestamp {
+            aleph,
+            ts: meta.created()?.into(),
+        }));
     }
-    let statusf = File::open(path).with_context(|| format!("Opening {path:?}"))?;
-    let meta = statusf.metadata()?;
-    let bufr = std::io::BufReader::new(statusf);
-    let aleph: Aleph = serde_json::from_reader(bufr)?;
-    Ok(Some(AlephWithTimestamp {
-        aleph,
-        ts: meta.created()?.into(),
-    }))
+    Ok(None)
 }
 
 #[cfg(test)]
@@ -70,14 +82,46 @@ mod test {
     // Waiting on https://github.com/rust-lang/rust/pull/125692
     #[cfg(not(target_env = "musl"))]
     #[test]
-    fn test_parse_from_root() -> Result<()> {
+    fn test_parse_from_root_coreos() -> Result<()> {
         let root: &tempfile::TempDir = &tempfile::tempdir()?;
         let root = root.path();
         let sysroot = &root.join("sysroot");
         std::fs::create_dir(sysroot).context("Creating sysroot")?;
-        std::fs::write(root.join(ALEPH_PATH), V1_ALEPH_DATA).context("Writing aleph")?;
+        std::fs::write(root.join(ALEPH_PATHS[0]), V1_ALEPH_DATA).context("Writing aleph")?;
         let aleph = get_aleph_version(root).unwrap().unwrap();
         assert_eq!(aleph.aleph.version, "32.20201002.dev.2");
+        Ok(())
+    }
+
+    // Waiting on https://github.com/rust-lang/rust/pull/125692
+    #[cfg(not(target_env = "musl"))]
+    #[test]
+    fn test_parse_from_root_bootc() -> Result<()> {
+        let root: &tempfile::TempDir = &tempfile::tempdir()?;
+        let root = root.path();
+        let sysroot = &root.join("sysroot");
+        std::fs::create_dir(sysroot).context("Creating sysroot")?;
+        std::fs::write(root.join(ALEPH_PATHS[1]), V1_ALEPH_DATA).context("Writing aleph")?;
+        let aleph = get_aleph_version(root).unwrap().unwrap();
+        assert_eq!(aleph.aleph.version, "32.20201002.dev.2");
+        Ok(())
+    }
+
+    // Waiting on https://github.com/rust-lang/rust/pull/125692
+    #[cfg(not(target_env = "musl"))]
+    #[test]
+    fn test_parse_coreos_preferred_over_bootc() -> Result<()> {
+        // When both files exist, the CoreOS aleph should be preferred
+        let root: &tempfile::TempDir = &tempfile::tempdir()?;
+        let root = root.path();
+        let sysroot = &root.join("sysroot");
+        std::fs::create_dir(sysroot).context("Creating sysroot")?;
+        let coreos_data = r##"{"version": "coreos-version"}"##;
+        let bootc_data = r##"{"version": "bootc-version"}"##;
+        std::fs::write(root.join(ALEPH_PATHS[0]), coreos_data).context("Writing coreos aleph")?;
+        std::fs::write(root.join(ALEPH_PATHS[1]), bootc_data).context("Writing bootc aleph")?;
+        let aleph = get_aleph_version(root).unwrap().unwrap();
+        assert_eq!(aleph.aleph.version, "coreos-version");
         Ok(())
     }
 
@@ -92,7 +136,7 @@ mod test {
         let target_name = ".new-ostree-aleph.json";
         let target = &sysroot.join(target_name);
         std::fs::write(root.join(target), V1_ALEPH_DATA).context("Writing aleph")?;
-        std::os::unix::fs::symlink(target_name, root.join(ALEPH_PATH)).context("Symlinking")?;
+        std::os::unix::fs::symlink(target_name, root.join(ALEPH_PATHS[0])).context("Symlinking")?;
         let aleph = get_aleph_version(root).unwrap().unwrap();
         assert_eq!(aleph.aleph.version, "32.20201002.dev.2");
         Ok(())
@@ -118,6 +162,39 @@ mod test {
     fn test_parse_aleph() -> Result<()> {
         let aleph: Aleph = serde_json::from_str(V1_ALEPH_DATA)?;
         assert_eq!(aleph.version, "32.20201002.dev.2");
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_bootc_aleph() -> Result<()> {
+        // A realistic bootc aleph as written by `bootc install`.
+        // See https://github.com/bootc-dev/bootc/commit/c6112d2d2fa3b785c858741f1585b0578088eda2
+        let alephdata = r##"
+{
+    "digest": "sha256:07bf537cc4e4d208eb0b978f76e5046e55529ce6192b982d8c1a41fa1d61b95a",
+    "kernel": "6.18.13-200.fc43.x86_64",
+    "labels": {
+        "com.coreos.inputhash": "fe9883169714c593d98058606e886b9747710ed15ab1b9cdbd7fa538fb435b3c",
+        "com.coreos.osname": "fedora-coreos",
+        "com.coreos.stream": "testing-devel",
+        "containers.bootc": "1",
+        "io.buildah.version": "1.42.2",
+        "org.opencontainers.image.description": "Fedora CoreOS testing-devel",
+        "org.opencontainers.image.revision": "233fe18749c7d2749581e4307c4cac60967acde4",
+        "org.opencontainers.image.source": "git@github.com:jbtrystram/fedora-coreos-config.git",
+        "org.opencontainers.image.title": "Fedora CoreOS testing-devel",
+        "org.opencontainers.image.version": "43.20260301.20.dev1",
+        "ostree.bootable": "1",
+        "ostree.commit": "89635f7cba9de932fc60d71a6bded65ad0db06a35c9d016da03ca7ade9ba4736",
+        "ostree.final-diffid": "sha256:12787d84fa137cd5649a9005efe98ec9d05ea46245fdc50aecb7dd007f2035b1"
+    },
+    "selinux": "disabled",
+    "target-image": "ostree-image-signed:docker://quay.io/fedora/fedora-coreos:testing-devel",
+    "timestamp": null,
+    "version": "43.20260301.20.dev1"
+}"##;
+        let aleph: Aleph = serde_json::from_str(alephdata)?;
+        assert_eq!(aleph.version, "43.20260301.20.dev1");
         Ok(())
     }
 }

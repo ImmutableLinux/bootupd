@@ -16,6 +16,7 @@ Refs:
 #![allow(clippy::style)]
 #![deny(clippy::dbg_macro)]
 
+mod aleph;
 mod backend;
 #[cfg(any(target_arch = "x86_64", target_arch = "powerpc64"))]
 mod bios;
@@ -23,7 +24,6 @@ mod bootloader;
 mod bootupd;
 mod cli;
 mod component;
-mod aleph;
 #[cfg(any(
     target_arch = "x86_64",
     target_arch = "aarch64",
