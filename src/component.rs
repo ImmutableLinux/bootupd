@@ -10,6 +10,7 @@ use cap_std::{ambient_authority, fs::Permissions};
 use cap_std_ext::dirext::CapStdExtDirExt;
 use fn_error_context::context;
 use serde::{Deserialize, Serialize};
+use std::any::Any;
 use std::path::{Path, PathBuf};
 
 use bootc_internal_blockdev::Device;
@@ -53,6 +54,8 @@ impl std::fmt::Display for ComponentType {
 /// handles installing bootloader files during image builds, applying updates at runtime,
 /// and optionally adopting existing installations not originally managed by bootupd.
 pub(crate) trait Component {
+    fn as_any(&self) -> &dyn Any;
+
     /// Returns the name of the component; this will be used for serialization
     /// and should remain stable.
     fn name(&self) -> &'static str;
