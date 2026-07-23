@@ -276,11 +276,36 @@ pub(crate) fn install(opts: &InstallOpts, devices: &[Device], configs: ConfigMod
             Some(uuid) => {
                 let meta = get_static_config_meta()?;
                 state.static_configs = Some(meta);
+
+                let mut esp_dir = None;
+
+                #[cfg(efi_arch)]
+                {
+                    for c in &target_components {
+                        use crate::efi::Efi;
+
+                        if let Some(efi) = c.as_any().downcast_ref::<Efi>() {
+                            let mounted_esp_path = efi.get_esp_mountpoint();
+                            let mounted_esp_path = mounted_esp_path.as_ref().ok_or_else(|| {
+                                anyhow!("Mounted ESP not found to install static grub config")
+                            })?;
+
+                            esp_dir = Some(
+                                Dir::open_ambient_dir(mounted_esp_path, ambient_authority())
+                                    .context("Opening mounted ESP dir")?,
+                            );
+
+                            break;
+                        }
+                    }
+                }
+
                 crate::grubconfigs::install(
                     sysroot,
                     Some(&source_root_dir),
                     installed_efi_vendor.as_deref(),
                     uuid,
+                    esp_dir.as_ref(),
                 )?;
             }
             // On other architectures, assume that there's nothing to do.

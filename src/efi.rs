@@ -187,6 +187,11 @@ impl Efi {
         }
     }
 
+    /// Returns the ESP's mountpoint if present
+    pub(crate) fn get_esp_mountpoint(&self) -> std::cell::Ref<'_, Option<PathBuf>> {
+        self.mountpoint.borrow()
+    }
+
     /// Checks if we have already mounted the ESP
     /// If not, checks if the ESP is mounted at common mountpoints, i.e. /boot, /boot/efi
     /// Else, mounts the ESP at a temp path
@@ -389,7 +394,7 @@ impl Component for Efi {
 
     // Backup "/boot/efi/EFI/{vendor}/grub.cfg" to "/boot/efi/EFI/{vendor}/grub.cfg.bak"
     // Replace "/boot/efi/EFI/{vendor}/grub.cfg" with new static "grub.cfg"
-    fn migrate_static_grub_config(&self, sysroot_path: &str, destdir: &Dir) -> Result<()> {
+    fn migrate_static_grub_config(&self, sysroot_path: &str, dest_efi_dir: &Dir) -> Result<()> {
         let sysroot = Dir::open_ambient_dir(sysroot_path, ambient_authority())
             .with_context(|| format!("Opening {sysroot_path}"))?;
         let Some(vendor) = self.get_efi_vendor(&Path::new(sysroot_path))? else {
@@ -397,7 +402,7 @@ impl Component for Efi {
         };
 
         // destdir is /boot/efi/EFI
-        let efidir = destdir
+        let efidir = dest_efi_dir
             .open_dir(&vendor)
             .with_context(|| format!("Opening EFI/{}", vendor))?;
 
@@ -412,7 +417,7 @@ impl Component for Efi {
                 .context("Failed to backup GRUB config")?;
         }
 
-        grubconfigs::install(&sysroot, None, Some(&vendor), true)?;
+        grubconfigs::install(&sysroot, None, Some(&vendor), true, Some(&efidir))?;
         // Synchronize the filesystem containing /boot/efi/EFI/{vendor} to disk.
         fsfreeze_thaw_cycle(efidir.reopen_as_ownedfd()?)?;
 
