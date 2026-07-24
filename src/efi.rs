@@ -93,9 +93,6 @@ pub(crate) fn is_efi_booted() -> Result<bool> {
 #[derive(Default, Debug)]
 pub(crate) struct Efi {
     mountpoint: RefCell<Option<PathBuf>>,
-    /// Whether the above mountpoint was already mounted or not
-    /// Won't unmount if it was already mounted
-    was_mounted: RefCell<bool>,
     /// Guard for ESP mounted at a temporary location
     tempmount_guard: RefCell<Option<TempMount>>,
 }
@@ -152,7 +149,6 @@ impl Efi {
 
         // Only borrow mutably if we found a mount point
         log::debug!("Reusing existing mount point {mnt:?}");
-        *self.was_mounted.borrow_mut() = true;
         *self.mountpoint.borrow_mut() = Some(mnt.clone());
         Ok(Some(mnt))
     }
@@ -163,9 +159,7 @@ impl Efi {
         match self.search_common_esp_mountpoints(root)? {
             Some(mnt) => {
                 log::debug!("Mounted at {:?}", mnt);
-                *self.was_mounted.borrow_mut() = true;
                 *self.mountpoint.borrow_mut() = Some(mnt.clone());
-
                 Ok(mnt)
             }
             None => {
@@ -209,26 +203,12 @@ impl Efi {
     }
 
     pub(crate) fn unmount(&self) -> Result<()> {
-        if *self.was_mounted.borrow() {
-            log::debug!("Mountpoint was already mounted, won't unmount");
-            return Ok(());
+        if let Some(tmpmount) = self.tempmount_guard.borrow_mut().take() {
+            drop(tmpmount);
+            log::trace!("Dropped tempmount");
         }
 
-        *self.was_mounted.borrow_mut() = false;
-
-        if let Some(mount) = self.mountpoint.borrow_mut().take() {
-            if let Some(tmpmount) = self.tempmount_guard.borrow_mut().take() {
-                drop(tmpmount);
-                log::trace!("Dropped tempmount");
-                return Ok(());
-            }
-
-            Command::new("umount")
-                .arg(&mount)
-                .run_inherited()
-                .with_context(|| format!("Failed to unmount {mount:?}"))?;
-            log::trace!("Unmounted");
-        }
+        *self.mountpoint.borrow_mut() = None;
 
         Ok(())
     }
