@@ -103,6 +103,7 @@ where
     rpm_parse_metadata(&rpmout.stdout)
 }
 
+#[cfg(not(feature = "rpm"))]
 fn split_name_version(input: &str) -> Option<(String, String)> {
     // assume it is "grub2-tools-1:2.06-110.el9.x86_64"
     // strip .arch
@@ -134,7 +135,7 @@ fn parse_evr(pkg: &str) -> Module {
         }
         #[cfg(feature = "rpm")]
         {
-            let nevra = rpm_rs::Nevra::parse(pkg);
+            let nevra = rpm_version::Nevra::parse(pkg);
             (nevra.name().to_string(), nevra.evr().to_string())
         }
     };
