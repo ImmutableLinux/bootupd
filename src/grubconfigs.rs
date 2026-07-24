@@ -34,6 +34,7 @@ pub(crate) fn install(
     src_root: Option<&Dir>,
     installed_efi_vendor: Option<&str>,
     write_uuid: bool,
+    mounted_esp: Option<&Dir>,
 ) -> Result<()> {
     let bootdir = &target_root.open_dir("boot").context("Opening /boot")?;
     let boot_is_mount = {
@@ -43,6 +44,7 @@ pub(crate) fn install(
         root_dev != boot_dev
     };
 
+    // This is in /sysroot/boot
     if !bootdir.exists(GRUB2DIR) {
         let mut dir_options = DirBuilder::new();
         dir_options.recursive(true).mode(0o700);
@@ -130,16 +132,16 @@ pub(crate) fn install(
 
     if let Some(vendordir) = installed_efi_vendor {
         log::debug!("vendordir={:?}", &vendordir);
-        let vendor = PathBuf::from(vendordir);
+        let vendor = PathBuf::from("EFI").join(vendordir);
         let target = &vendor.join("grub.cfg");
-        let dest_efidir = target_root
-            .open_dir_optional("boot/efi/EFI")
-            .context("Opening /boot/efi/EFI")?;
-        if let Some(efidir) = dest_efidir {
+
+        if let Some(efidir) = mounted_esp {
             configdir
                 .copy("grub-static-efi.cfg", &efidir, target)
                 .context("Copying static EFI")?;
+
             println!("Installed: {target:?}");
+
             if let Some(uuid_path) = uuid_path {
                 let target = &vendor.join(uuid_path);
                 grub2dir
@@ -216,7 +218,14 @@ mod tests {
         std::fs::create_dir_all(tdp.join("boot/grub2"))?;
         std::fs::create_dir_all(tdp.join("boot/efi/EFI/BOOT"))?;
         std::fs::create_dir_all(tdp.join("boot/efi/EFI/fedora"))?;
-        install(&td, None, Some("fedora"), false).unwrap();
+        install(
+            &td,
+            None,
+            Some("fedora"),
+            false,
+            Some(&td.open_dir("boot/efi").unwrap()),
+        )
+        .unwrap();
 
         assert!(td.exists("boot/grub2/grub.cfg"));
         assert!(td.exists("boot/efi/EFI/fedora/grub.cfg"));

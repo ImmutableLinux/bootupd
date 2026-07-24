@@ -99,6 +99,10 @@ impl Bios {
 }
 
 impl Component for Bios {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
     fn name(&self) -> &'static str {
         self.component_type().into()
     }
@@ -207,7 +211,7 @@ impl Component for Bios {
                 .context("Failed to backup GRUB config")?;
         }
 
-        crate::grubconfigs::install(&destdir, None, None, true)?;
+        crate::grubconfigs::install(&destdir, None, None, true, None)?;
 
         // Remove the real config if it is symlink and will not
         // if /boot/grub2/grub.cfg is file

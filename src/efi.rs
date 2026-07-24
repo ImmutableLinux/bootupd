@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{bail, Context, Result};
+use bootc_internal_mount::tempmount::TempMount;
 use bootc_internal_utils::CommandRunExt;
 use camino::{Utf8Path, Utf8PathBuf};
 use cap_std::ambient_authority;
@@ -18,6 +19,8 @@ use cap_std_ext::cap_std;
 use cap_std_ext::dirext::CapStdExtDirExt;
 use fn_error_context::context;
 use os_release::OsRelease;
+use rustix::mount::MountFlags;
+use rustix::path::Arg;
 use rustix::{fd::AsFd, fd::BorrowedFd, fs::StatVfsMountFlags};
 use walkdir::WalkDir;
 use widestring::U16CString;
@@ -90,16 +93,25 @@ pub(crate) fn is_efi_booted() -> Result<bool> {
 #[derive(Default, Debug)]
 pub(crate) struct Efi {
     mountpoint: RefCell<Option<PathBuf>>,
-    /// Whether the above mountpoint was already mounted or not
-    /// Won't unmount if it was already mounted
-    was_mounted: RefCell<bool>,
+    /// Guard for ESP mounted at a temporary location
+    tempmount_guard: RefCell<Option<TempMount>>,
+}
+
+/// Mount flags shared by all ESP mounts: non-executable, no setuid.
+const ESP_MOUNT_FLAGS: MountFlags =
+    MountFlags::from_bits_retain(MountFlags::NOEXEC.bits() | MountFlags::NOSUID.bits());
+
+/// FAT mount options: owner-only permissions on files (0600) and dirs (0700).
+const ESP_MOUNT_DATA: &std::ffi::CStr = c"fmask=0177,dmask=0077";
+
+/// Mount the ESP from the provided device into a temporary directory.
+fn mount_esp(device: &str) -> Result<TempMount> {
+    TempMount::mount_dev(device, "vfat", ESP_MOUNT_FLAGS, Some(ESP_MOUNT_DATA))
 }
 
 impl Efi {
-    // Get mounted point for esp
-    pub(crate) fn get_mounted_esp(&self, root: &Path) -> Result<Option<PathBuf>> {
-        // First check all potential mount points without holding the borrow
-        let mut found_mount = None;
+    #[context("Searching common ESP mountpoints")]
+    fn search_common_esp_mountpoints(&self, root: &Path) -> Result<Option<PathBuf>> {
         for &mnt in ESP_MOUNTS.iter() {
             let path = root.join(mnt);
             if !path.exists() {
@@ -119,59 +131,65 @@ impl Efi {
                     continue;
                 }
                 util::ensure_writable_mount(&path)?;
-                *self.was_mounted.borrow_mut() = true;
-                found_mount = Some(path);
-                break;
+                return Ok(Some(path));
             }
         }
+
+        Ok(None)
+    }
+
+    /// Get mounted point for ESP
+    /// NOTE: This function only searches the common ESP mountpoints and returns
+    /// the path of the mountpoint, if there is one
+    #[context("Getting mounted ESP")]
+    pub(crate) fn get_mounted_esp(&self, root: &Path) -> Result<Option<PathBuf>> {
+        let Some(mnt) = self.search_common_esp_mountpoints(root)? else {
+            return Ok(None);
+        };
 
         // Only borrow mutably if we found a mount point
-        if let Some(mnt) = found_mount {
-            log::debug!("Reusing existing mount point {mnt:?}");
-            *self.mountpoint.borrow_mut() = Some(mnt.clone());
-            Ok(Some(mnt))
-        } else {
-            Ok(None)
-        }
-    }
-
-    // Mount the passed esp_device, return mount point
-    pub(crate) fn mount_esp_device(&self, root: &Path, esp_device: &Path) -> Result<PathBuf> {
-        let mut mountpoint = None;
-
-        for &mnt in ESP_MOUNTS.iter() {
-            let mnt = root.join(mnt);
-            if !mnt.exists() {
-                continue;
-            }
-
-            // Check if the target is already a mounted ESP (e.g. the host
-            // already has the ESP mounted when running install-to-filesystem).
-            let st = rustix::fs::statfs(&mnt)?;
-            if st.f_type == libc::MSDOS_SUPER_MAGIC {
-                if is_mount_point(&mnt)? {
-                    log::debug!("ESP already mounted at {mnt:?}, reusing");
-                    mountpoint = Some(mnt);
-                    *self.was_mounted.borrow_mut() = true;
-                    break;
-                }
-            }
-
-            std::process::Command::new("mount")
-                .arg(&esp_device)
-                .arg(&mnt)
-                .run_inherited()
-                .with_context(|| format!("Failed to mount {:?}", esp_device))?;
-            log::debug!("Mounted at {mnt:?}");
-            mountpoint = Some(mnt);
-            break;
-        }
-        let mnt = mountpoint.ok_or_else(|| anyhow::anyhow!("No mount point found"))?;
+        log::debug!("Reusing existing mount point {mnt:?}");
         *self.mountpoint.borrow_mut() = Some(mnt.clone());
-        Ok(mnt)
+        Ok(Some(mnt))
     }
 
-    // Firstly check if esp is already mounted, then mount the passed esp device
+    /// Mount the passed esp_device, return mount point
+    #[context("Mounting ESP device at {}", root.display())]
+    pub(crate) fn mount_esp_device(&self, root: &Path, esp_device: &Path) -> Result<PathBuf> {
+        match self.search_common_esp_mountpoints(root)? {
+            Some(mnt) => {
+                log::debug!("Mounted at {:?}", mnt);
+                *self.mountpoint.borrow_mut() = Some(mnt.clone());
+                Ok(mnt)
+            }
+            None => {
+                // If the ESP isn't already mounted at /boot, /boot/efi mount it at a temporary point
+                // This is so that we don't shadow existing files in the above directories
+                let esp_mount = mount_esp(
+                    esp_device
+                        .as_str()
+                        .context("Converting esp_device path to str")?,
+                )
+                .context("Creating temp ESP mount")?;
+
+                let mnt_path = esp_mount.dir.path().to_path_buf();
+                *self.mountpoint.borrow_mut() = Some(mnt_path.clone());
+                *self.tempmount_guard.borrow_mut() = Some(esp_mount);
+
+                Ok(mnt_path)
+            }
+        }
+    }
+
+    /// Returns the ESP's mountpoint if present
+    pub(crate) fn get_esp_mountpoint(&self) -> std::cell::Ref<'_, Option<PathBuf>> {
+        self.mountpoint.borrow()
+    }
+
+    /// Checks if we have already mounted the ESP
+    /// If not, checks if the ESP is mounted at common mountpoints, i.e. /boot, /boot/efi
+    /// Else, mounts the ESP at a temp path
+    #[context("Ensuring mounted ESP")]
     pub(crate) fn ensure_mounted_esp(&self, root: &Path, esp_device: &Path) -> Result<PathBuf> {
         if let Some(mountpoint) = self.mountpoint.borrow().as_deref() {
             return Ok(mountpoint.to_owned());
@@ -185,14 +203,13 @@ impl Efi {
     }
 
     pub(crate) fn unmount(&self) -> Result<()> {
-        *self.was_mounted.borrow_mut() = false;
-        if let Some(mount) = self.mountpoint.borrow_mut().take() {
-            Command::new("umount")
-                .arg(&mount)
-                .run_inherited()
-                .with_context(|| format!("Failed to unmount {mount:?}"))?;
-            log::trace!("Unmounted");
+        if let Some(tmpmount) = self.tempmount_guard.borrow_mut().take() {
+            drop(tmpmount);
+            log::trace!("Dropped tempmount");
         }
+
+        *self.mountpoint.borrow_mut() = None;
+
         Ok(())
     }
 
@@ -318,6 +335,10 @@ fn skip_systemd_bootloaders() -> bool {
 }
 
 impl Component for Efi {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
     fn name(&self) -> &'static str {
         self.component_type().into()
     }
@@ -353,7 +374,7 @@ impl Component for Efi {
 
     // Backup "/boot/efi/EFI/{vendor}/grub.cfg" to "/boot/efi/EFI/{vendor}/grub.cfg.bak"
     // Replace "/boot/efi/EFI/{vendor}/grub.cfg" with new static "grub.cfg"
-    fn migrate_static_grub_config(&self, sysroot_path: &str, destdir: &Dir) -> Result<()> {
+    fn migrate_static_grub_config(&self, sysroot_path: &str, dest_efi_dir: &Dir) -> Result<()> {
         let sysroot = Dir::open_ambient_dir(sysroot_path, ambient_authority())
             .with_context(|| format!("Opening {sysroot_path}"))?;
         let Some(vendor) = self.get_efi_vendor(&Path::new(sysroot_path))? else {
@@ -361,7 +382,7 @@ impl Component for Efi {
         };
 
         // destdir is /boot/efi/EFI
-        let efidir = destdir
+        let efidir = dest_efi_dir
             .open_dir(&vendor)
             .with_context(|| format!("Opening EFI/{}", vendor))?;
 
@@ -376,7 +397,7 @@ impl Component for Efi {
                 .context("Failed to backup GRUB config")?;
         }
 
-        grubconfigs::install(&sysroot, None, Some(&vendor), true)?;
+        grubconfigs::install(&sysroot, None, Some(&vendor), true, Some(&efidir))?;
         // Synchronize the filesystem containing /boot/efi/EFI/{vendor} to disk.
         fsfreeze_thaw_cycle(efidir.reopen_as_ownedfd()?)?;
 
@@ -751,11 +772,6 @@ impl Component for Efi {
 
 impl Drop for Efi {
     fn drop(&mut self) {
-        if *self.was_mounted.borrow() {
-            log::debug!("mountpoint was already mounted. Won't unmount",);
-            return;
-        }
-
         log::debug!("Unmounting {:?}", self.mountpoint);
         let _ = self.unmount();
     }
