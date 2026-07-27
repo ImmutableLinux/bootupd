@@ -1,10 +1,10 @@
+use crate::aleph;
 #[cfg(any(target_arch = "x86_64", target_arch = "powerpc64"))]
 use crate::bios;
 use crate::bootloader::{get_bootloader, Bootloader};
 use crate::cli::bootupd::InstallOpts;
 use crate::component::{self, ComponentType};
 use crate::component::{Component, ValidationResult};
-use crate::coreos;
 #[cfg(any(
     target_arch = "x86_64",
     target_arch = "aarch64",
@@ -623,7 +623,7 @@ pub(crate) fn status() -> Result<Status> {
         // To determine if not-installed components can be adopted:
         //
         // `query_adopt_state()` checks for existing installation state,
-        // such as a `version` in `/sysroot/.coreos-aleph-version.json`,
+        // such as a `version` in an aleph file (e.g. `.coreos-aleph-version.json` or `.bootc-aleph.json`),
         // or the presence of `/ostree/deploy`.
         //
         // `component.query_adopt()` performs additional checks,
@@ -706,8 +706,8 @@ pub(crate) fn print_status(status: &Status) -> Result<()> {
         }
     }
 
-    if let Some(coreos_aleph) = coreos::get_aleph_version(Path::new("/"))? {
-        println!("CoreOS aleph version: {}", coreos_aleph.aleph.version);
+    if let Some(aleph) = aleph::get_aleph_version(Path::new("/"))? {
+        println!("Aleph version: {}", aleph.aleph.version);
     }
 
     #[cfg(any(

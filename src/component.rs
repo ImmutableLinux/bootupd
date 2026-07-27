@@ -268,10 +268,10 @@ pub(crate) fn write_update_metadata(
 #[context("Querying adoptable state")]
 pub(crate) fn query_adopt_state() -> Result<Option<Adoptable>> {
     // This would be extended with support for other operating systems later
-    if let Some(coreos_aleph) = crate::coreos::get_aleph_version(Path::new("/"))? {
+    if let Some(aleph) = crate::aleph::get_aleph_version(Path::new("/"))? {
         let meta = ContentMetadata {
-            timestamp: coreos_aleph.ts,
-            version: coreos_aleph.aleph.version,
+            timestamp: aleph.ts,
+            version: aleph.aleph.version,
             versions: None,
             #[cfg(efi_arch)]
             default_bootloader: None,
@@ -282,7 +282,7 @@ pub(crate) fn query_adopt_state() -> Result<Option<Adoptable>> {
             confident: true,
         }));
     } else {
-        log::trace!("No CoreOS aleph detected");
+        log::trace!("No aleph version file detected");
     }
     let ostree_deploy_dir = Path::new("/ostree/deploy");
     if ostree_deploy_dir.exists() {
