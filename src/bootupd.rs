@@ -588,6 +588,19 @@ pub(crate) fn status() -> Result<Status> {
     let mut known_components = get_components();
     let root = Dir::open_ambient_dir("/", ambient_authority())?;
 
+    // Populate aleph version
+    ret.aleph_version = aleph::get_aleph_version(Path::new("/"))?.map(|a| a.aleph.version);
+
+    // Populate boot method
+    #[cfg(any(
+        target_arch = "x86_64",
+        target_arch = "aarch64",
+        target_arch = "riscv64"
+    ))]
+    {
+        ret.boot_method = Some(if efi::is_efi_booted()? { "EFI" } else { "BIOS" }.into());
+    }
+
     let bootloader = get_bootloader()?;
     let state = SavedState::load_from_disk("/", Some(bootloader))?;
 
@@ -706,17 +719,11 @@ pub(crate) fn print_status(status: &Status) -> Result<()> {
         }
     }
 
-    if let Some(aleph) = aleph::get_aleph_version(Path::new("/"))? {
-        println!("Aleph version: {}", aleph.aleph.version);
+    if let Some(aleph_version) = &status.aleph_version {
+        println!("Aleph version: {}", aleph_version);
     }
 
-    #[cfg(any(
-        target_arch = "x86_64",
-        target_arch = "aarch64",
-        target_arch = "riscv64"
-    ))]
-    {
-        let boot_method = if efi::is_efi_booted()? { "EFI" } else { "BIOS" };
+    if let Some(boot_method) = &status.boot_method {
         println!("Boot method: {}", boot_method);
     }
 

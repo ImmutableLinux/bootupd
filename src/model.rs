@@ -168,6 +168,10 @@ pub(crate) struct Adoptable {
 #[serde(rename_all = "kebab-case")]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Status {
+    /// Origin version from the Aleph file
+    pub(crate) aleph_version: Option<String>,
+    /// The method used to boot the system (e.g. "EFI" or "BIOS"), if detected
+    pub(crate) boot_method: Option<String>,
     /// Maps a component name to status
     pub(crate) components: BTreeMap<String, ComponentStatus>,
     /// Components that appear to be installed, not via bootupd
@@ -275,6 +279,8 @@ mod test {
     fn test_deserialize_status() -> Result<()> {
         let data = include_str!("../tests/fixtures/example-status-v0.json");
         let status: Status = serde_json::from_str(data)?;
+        assert_eq!(status.aleph_version.as_deref(), Some("32.20201002.dev.2"));
+        assert_eq!(status.boot_method.as_deref(), Some("EFI"));
         let efi = status.components.get("EFI").expect("EFI");
         assert_eq!(
             efi.installed.version,
