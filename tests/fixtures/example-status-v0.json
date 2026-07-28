@@ -1,4 +1,6 @@
 {
+  "aleph-version": "32.20201002.dev.2",
+  "boot-method": "EFI",
   "components": {
     "EFI": {
       "installed": {
