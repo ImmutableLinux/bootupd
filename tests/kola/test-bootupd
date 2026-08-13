@@ -91,7 +91,7 @@ else
     assert_file_has_content_literal out.txt '  Installed: grub2-efi-x64-'
 fi
 assert_file_has_content_literal out.txt 'Update: At latest version'
-assert_file_has_content out.txt '^CoreOS aleph version:'
+assert_file_has_content out.txt '^Aleph version:'
 ok status
 
 bootupctl validate | tee out.txt
