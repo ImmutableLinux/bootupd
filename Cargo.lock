@@ -186,7 +186,6 @@ dependencies = [
  "log",
  "openssl",
  "os-release",
- "regex",
  "rpm-version",
  "rustix",
  "serde",

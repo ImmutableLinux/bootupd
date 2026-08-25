@@ -256,14 +256,21 @@ impl Efi {
     }
 }
 
+/// Helper function to remove ".release.*" from the contents of etc/system-release, leaving just the name
+fn get_system_name(contents: impl AsRef<str>) -> String {
+    let contents = contents.as_ref();
+    match contents.find("release") {
+        Some(index) => contents[..index].trim().to_owned(),
+        None => contents.trim().to_owned(),
+    }
+}
+
 #[context("Get product name")]
 fn get_product_name(sysroot: &Dir) -> Result<String> {
     let release_path = "etc/system-release";
     if sysroot.exists(release_path) {
-        let content = sysroot.read_to_string(release_path)?;
-        let re = regex::Regex::new(r" *release.*").unwrap();
-        let name = re.replace_all(&content, "").trim().to_string();
-        return Ok(name);
+        let contents = sysroot.read_to_string(release_path)?;
+        return Ok(get_system_name(contents));
     }
     // Read /etc/os-release
     let release: OsRelease = OsRelease::new()?;
@@ -1235,5 +1242,17 @@ Boot0003* test";
         let efi_comps = get_efi_component_from_usr(utf8_tpath, EFILIB, None)?;
         assert_eq!(efi_comps, None);
         Ok(())
+    }
+
+    #[test]
+    fn test_get_system_name() {
+        assert_eq!("Fedora", &get_system_name("Fedora release 44 (Forty Four)"));
+        assert_eq!("CentOS Stream", &get_system_name("CentOS Stream release 9"));
+        assert_eq!(
+            "Red Hat Enterprise Linux",
+            &get_system_name("Red Hat Enterprise Linux release 10.2 (Coughlan)")
+        );
+        assert_eq!("no_change", &get_system_name("no_change"));
+        assert_eq!("", &get_system_name(""));
     }
 }
