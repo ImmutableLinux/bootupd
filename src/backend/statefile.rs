@@ -12,7 +12,7 @@ use cap_std::ambient_authority;
 use cap_std::fs::{Dir, Permissions, PermissionsExt};
 use cap_std_ext::dirext::CapStdExtDirExt;
 use fn_error_context::context;
-use fs2::FileExt;
+use rustix::fs::{flock, FlockOperation};
 use std::fs::File;
 use std::io::prelude::*;
 use std::path::Path;
@@ -90,7 +90,7 @@ impl SavedState {
             .context("Opening lock file")?
             .into_std();
 
-        lockfile.lock_exclusive().context("Acquiring lock")?;
+        flock(&lockfile, FlockOperation::LockExclusive).context("Acquiring lock")?;
 
         let guard = StateLockGuard {
             sysroot_path,
