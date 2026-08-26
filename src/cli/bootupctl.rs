@@ -1,4 +1,6 @@
 use crate::bootupd;
+#[cfg(efi_arch)]
+use crate::secureboot::validate_secureboot_for_update;
 use anyhow::Result;
 use clap::Parser;
 use log::LevelFilter;
@@ -54,7 +56,7 @@ pub enum CtlVerb {
     #[clap(name = "status", about = "Show components status")]
     Status(StatusOpts),
     #[clap(name = "update", about = "Update all components")]
-    Update,
+    Update(UpdateOpts),
     #[clap(name = "adopt-and-update", about = "Update all adoptable components")]
     AdoptAndUpdate(AdoptAndUpdateOpts),
     #[clap(name = "validate", about = "Validate system state")]
@@ -92,10 +94,25 @@ pub struct StatusOpts {
 }
 
 #[derive(Debug, Parser)]
+pub struct UpdateOpts {
+    /// Whether to skip the check for the Microsoft 2023 CA UEFI certificate
+    /// when updating if Secure Boot is enabled.
+    ///
+    /// This is a safety feature intended to prevent users from breaking
+    /// Secure Boot. Therefore, it's recommended to only use this flag
+    /// if you know what you're doing.
+    #[cfg(efi_arch)]
+    #[clap(long, action)]
+    skip_ms_2023_cert_check: bool,
+}
+
+#[derive(Debug, Parser)]
 pub struct AdoptAndUpdateOpts {
     /// Install the static GRUB config files
     #[clap(long, action)]
     with_static_config: bool,
+    #[command(flatten)]
+    update: UpdateOpts,
 }
 
 impl CtlCommand {
@@ -103,7 +120,7 @@ impl CtlCommand {
     pub fn run(self) -> Result<()> {
         match self.cmd {
             CtlVerb::Status(opts) => Self::run_status(opts),
-            CtlVerb::Update => Self::run_update(),
+            CtlVerb::Update(opts) => Self::run_update(opts),
             CtlVerb::AdoptAndUpdate(opts) => Self::run_adopt_and_update(opts),
             CtlVerb::Validate => Self::run_validate(),
             CtlVerb::Backend(CtlBackend::Generate(opts)) => {
@@ -141,14 +158,22 @@ impl CtlCommand {
     }
 
     /// Runner for `update` verb.
-    fn run_update() -> Result<()> {
+    fn run_update(_opts: UpdateOpts) -> Result<()> {
         ensure_running_in_systemd()?;
+        #[cfg(efi_arch)]
+        if !_opts.skip_ms_2023_cert_check {
+            validate_secureboot_for_update()?;
+        }
         bootupd::client_run_update()
     }
 
-    /// Runner for `update` verb.
+    /// Runner for `adopt-and-update` verb.
     fn run_adopt_and_update(opts: AdoptAndUpdateOpts) -> Result<()> {
         ensure_running_in_systemd()?;
+        #[cfg(efi_arch)]
+        if !opts.update.skip_ms_2023_cert_check {
+            validate_secureboot_for_update()?;
+        }
         bootupd::client_run_adopt_and_update(opts.with_static_config)
     }
 

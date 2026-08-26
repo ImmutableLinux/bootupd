@@ -45,6 +45,8 @@ mod model;
 mod model_legacy;
 mod ostreeutil;
 mod packagesystem;
+#[cfg(efi_arch)]
+mod secureboot;
 mod sha512string;
 mod util;
 
