@@ -2,13 +2,13 @@
 name = "bootupd"
 description = "Bootloader updater"
 license = "Apache-2.0"
-version = "0.2.36"
+version = "0.3.0"
 authors = ["Colin Walters <walters@verbum.org>"]
 edition = "2021"
 rust-version = "1.90.0"
 homepage = "https://github.com/coreos/bootupd"
 
-include = ["src", "LICENSE", "Makefile", "systemd"]
+include = ["src", "LICENSE", "Makefile", "systemd", "build.rs"]
 
 # See https://github.com/coreos/cargo-vendor-filterer
 [package.metadata.vendor-filter]

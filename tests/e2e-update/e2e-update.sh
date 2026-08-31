@@ -93,6 +93,7 @@ systemd:
       enabled: true
       contents: |
         [Unit]
+        Before=bootloader-update.service
         RequiresMountsFor=/run/testtmp
         [Service]
         Type=oneshot
