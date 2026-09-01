@@ -21,13 +21,13 @@ endif
 .PHONY: all
 all:
 	cargo build ${CARGO_ARGS}
-	ln -f target/${PROFILE}/bootupd target/${PROFILE}/bootupctl
+	ln -srf target/${PROFILE}/bootupd target/${PROFILE}/bootupctl
 
 .PHONY: install
 install:
 	mkdir -p "${DESTDIR}$(PREFIX)/bin" "${DESTDIR}$(LIBEXECDIR)"
 	install -D -t "${DESTDIR}$(LIBEXECDIR)" target/${PROFILE}/bootupd
-	ln -f ${DESTDIR}$(LIBEXECDIR)/bootupd ${DESTDIR}$(PREFIX)/bin/bootupctl
+	ln -srf ${DESTDIR}$(LIBEXECDIR)/bootupd ${DESTDIR}$(PREFIX)/bin/bootupctl
 
 .PHONY: install-grub-static
 install-grub-static:
