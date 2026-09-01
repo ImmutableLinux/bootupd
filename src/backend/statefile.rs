@@ -9,7 +9,7 @@ use anyhow::{bail, Context, Result};
 use bootc_internal_blockdev::Device;
 use camino::Utf8PathBuf;
 use cap_std::ambient_authority;
-use cap_std::fs::{Dir, Permissions, PermissionsExt};
+use cap_std::fs::{Dir, OpenOptions, OpenOptionsExt, Permissions, PermissionsExt};
 use cap_std_ext::dirext::CapStdExtDirExt;
 use fn_error_context::context;
 use rustix::fs::{flock, FlockOperation};
@@ -81,13 +81,14 @@ impl SavedState {
         sysroot_path: Utf8PathBuf,
         sysroot: Dir,
     ) -> Result<StateLockGuard> {
-        sysroot
-            .atomic_write_with_perms(Self::WRITE_LOCK_PATH, "", Permissions::from_mode(0o644))
-            .context("Creating lock file")?;
-
+        let opts = {
+            let mut o = OpenOptions::new();
+            o.write(true).create(true).mode(0o644);
+            o
+        };
         let lockfile = sysroot
-            .open(Self::WRITE_LOCK_PATH)
-            .context("Opening lock file")?
+            .open_with(Self::WRITE_LOCK_PATH, &opts)
+            .context("Creating/opening lock file")?
             .into_std();
 
         flock(&lockfile, FlockOperation::LockExclusive).context("Acquiring lock")?;
