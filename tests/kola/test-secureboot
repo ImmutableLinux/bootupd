@@ -1,0 +1,32 @@
+#!/bin/bash
+## kola:
+##   # qemu is the only platform where setting a 'secure-boot' tag will cause
+##   # secureboot to get turned on for that instance.
+##   platforms: qemu
+##   # Mark as exclusive since we are requesting secureboot and that won't take effect when we're
+##   # running non-exclusively.
+##   exclusive: true
+##   tags: secure-boot
+##   architectures: x86_64
+##   description: Verify that Secure Boot certificate validation works as intended
+#
+# See https://github.com/coreos/bootupd/issues/1099
+#
+# NOTE: we're only testing the positive case here, as testing the negative case
+# is non-trivial since we need to generate and use a custom vars file with only the 2011 cert.
+
+set -xeuo pipefail
+
+. $KOLA_EXT_DATA/libtest.sh
+
+if [[ "$(mokutil --sb)" != "SecureBoot enabled" ]]; then
+    fatal "system is not running with Secure Boot enabled"
+fi
+
+bootupctl status > /tmp/out.txt
+assert_file_has_content_literal /tmp/out.txt 'Component EFI'
+
+# No need to force an update scenario since this should hit the certificate check
+# regardless of whether there's any available updates.
+bootupctl update
+ok "passed the Secure Boot certificate check when the 2023 Microsoft cert is available"

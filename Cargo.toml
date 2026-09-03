@@ -46,6 +46,10 @@ uapi-version = "0.4.0"
 walkdir = "2.3.2"
 signal-hook-registry = "1.4.8"
 
+# EFI-only dependencies
+[target.'cfg(any(target_arch = "x86_64", target_arch = "aarch64", target_arch = "riscv64"))'.dependencies]
+virtfw-libefi = { version = "0.6", features = ["std", "sbdata"] }
+
 [profile.release]
 # We assume we're being delivered via e.g. RPM which supports split debuginfo
 debug = true
